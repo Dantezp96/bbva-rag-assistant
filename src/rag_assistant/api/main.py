@@ -20,6 +20,7 @@ from rag_assistant.conversation import init_database
 from rag_assistant.core.exceptions import (
     CollectionNotFoundError,
     ConfigurationError,
+    ConversationError,
     ConversationNotFoundError,
     LLMAuthenticationError,
     LLMRateLimitError,
@@ -37,6 +38,9 @@ _STATUS_BY_EXCEPTION: list[tuple[type[RAGAssistantError], int]] = [
     (LLMAuthenticationError, 502),
     (LLMRateLimitError, 429),
     (VectorStoreError, 503),
+    # Una base de datos caída no es culpa del cliente: 503, no 400. Comprobado
+    # parando el contenedor de PostgreSQL (`scripts/e2e_resiliencia.py`).
+    (ConversationError, 503),
     (ConfigurationError, 500),
 ]
 

@@ -16,17 +16,55 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import wraps
+from typing import ParamSpec, TypeVar
 
 from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from rag_assistant.conversation.db import session_scope
 from rag_assistant.conversation.entities import ConversationEntity, MessageEntity
-from rag_assistant.core.exceptions import ConversationError, ConversationNotFoundError
+from rag_assistant.core.exceptions import (
+    ConversationError,
+    ConversationNotFoundError,
+    RAGAssistantError,
+)
 from rag_assistant.core.logging import get_logger
 from rag_assistant.core.models import Message, RAGAnswer, Role
 
 logger = get_logger(__name__)
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _traduce_errores_de_bd(operacion: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Convierte fallos de SQLAlchemy en errores de dominio.
+
+    Sin esto, una base de datos caída se escapa como un 500 opaco con la traza
+    del driver. Con esto, la capa HTTP puede responder 503 y decir qué pasó.
+    Se probó parando el contenedor de PostgreSQL: ese es el caso que cubre.
+    """
+
+    def decorador(funcion: Callable[_P, _R]) -> Callable[_P, _R]:
+        @wraps(funcion)
+        def envoltorio(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            try:
+                return funcion(*args, **kwargs)
+            except RAGAssistantError:
+                raise
+            except SQLAlchemyError as exc:
+                logger.error("conversation.db_error", operacion=operacion, error=str(exc))
+                raise ConversationError(
+                    f"No se pudo {operacion}",
+                    detail="La base de datos del historial no está disponible.",
+                ) from exc
+
+        return envoltorio
+
+    return decorador
 
 
 class ConversationRepository(ABC):
@@ -78,6 +116,7 @@ class ConversationRepository(ABC):
 class SqlConversationRepository(ConversationRepository):
     """Implementación sobre SQLAlchemy (PostgreSQL o SQLite)."""
 
+    @_traduce_errores_de_bd("crear o recuperar la conversación")
     def ensure_conversation(
         self,
         conversation_id: str | None = None,
@@ -86,20 +125,14 @@ class SqlConversationRepository(ConversationRepository):
         channel: str = "api",
     ) -> str:
         resolved = (conversation_id or "").strip() or f"conv-{uuid.uuid4().hex[:12]}"
-        try:
-            with session_scope() as session:
-                existing = session.get(ConversationEntity, resolved)
-                if existing is None:
-                    session.add(
-                        ConversationEntity(id=resolved, user_id=user_id, channel=channel)
-                    )
-                    logger.info("conversation.created", conversation_id=resolved)
-        except Exception as exc:
-            raise ConversationError(
-                "No se pudo crear/recuperar la conversación", detail=str(exc)
-            ) from exc
+        with session_scope() as session:
+            existing = session.get(ConversationEntity, resolved)
+            if existing is None:
+                session.add(ConversationEntity(id=resolved, user_id=user_id, channel=channel))
+                logger.info("conversation.created", conversation_id=resolved)
         return resolved
 
+    @_traduce_errores_de_bd("leer el historial de la conversación")
     def get_recent_messages(self, conversation_id: str, limit: int) -> list[Message]:
         if limit <= 0:
             return []
@@ -125,6 +158,7 @@ class SqlConversationRepository(ConversationRepository):
             for row in reversed(rows)
         ]
 
+    @_traduce_errores_de_bd("guardar el mensaje")
     def add_user_message(self, conversation_id: str, content: str) -> int:
         with session_scope() as session:
             message = MessageEntity(
@@ -135,6 +169,7 @@ class SqlConversationRepository(ConversationRepository):
             self._touch(session, conversation_id, tokens=0, title_hint=content)
             return message.id
 
+    @_traduce_errores_de_bd("guardar la respuesta")
     def add_assistant_message(self, conversation_id: str, answer: RAGAnswer) -> int:
         with session_scope() as session:
             message = MessageEntity(
@@ -179,6 +214,7 @@ class SqlConversationRepository(ConversationRepository):
             self._touch(session, conversation_id, tokens=0)
             return entity.id
 
+    @_traduce_errores_de_bd("listar las conversaciones")
     def list_conversations(self, *, limit: int = 50, offset: int = 0) -> list[dict]:
         with session_scope() as session:
             rows = (
@@ -205,6 +241,7 @@ class SqlConversationRepository(ConversationRepository):
                 for row in rows
             ]
 
+    @_traduce_errores_de_bd("recuperar la conversación")
     def get_conversation(self, conversation_id: str) -> dict:
         with session_scope() as session:
             conversation = session.get(ConversationEntity, conversation_id)
@@ -247,6 +284,7 @@ class SqlConversationRepository(ConversationRepository):
                 ],
             }
 
+    @_traduce_errores_de_bd("registrar la valoración")
     def set_feedback(self, message_id: int, value: int) -> None:
         if value not in (-1, 1):
             raise ConversationError("El feedback debe ser 1 (útil) o -1 (no útil)")
@@ -256,6 +294,7 @@ class SqlConversationRepository(ConversationRepository):
                 raise ConversationNotFoundError(f"No existe el mensaje {message_id}")
             message.feedback = value
 
+    @_traduce_errores_de_bd("eliminar la conversación")
     def delete_conversation(self, conversation_id: str) -> None:
         with session_scope() as session:
             conversation = session.get(ConversationEntity, conversation_id)

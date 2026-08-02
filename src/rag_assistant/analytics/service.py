@@ -33,9 +33,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Float, case, cast, func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from rag_assistant.conversation.db import session_scope
 from rag_assistant.conversation.entities import ConversationEntity, MessageEntity
+from rag_assistant.core.exceptions import ConversationError
 from rag_assistant.core.logging import get_logger
 from rag_assistant.core.models import Role
 
@@ -140,6 +142,18 @@ class AnalyticsService:
 
     def report(self, *, days: int | None = None, limit_examples: int = 10) -> AnalyticsReport:
         """Genera el informe. `days` acota el periodo; `None` = todo el histórico."""
+        try:
+            return self._report(days=days, limit_examples=limit_examples)
+        except SQLAlchemyError as exc:
+            # Sin esto, una base caída se escapaba como un 500 opaco con la
+            # traza del driver. Comprobado parando el contenedor de PostgreSQL.
+            logger.error("analytics.db_error", error=str(exc))
+            raise ConversationError(
+                "No se pudo generar el informe de analítica",
+                detail="La base de datos del historial no está disponible.",
+            ) from exc
+
+    def _report(self, *, days: int | None, limit_examples: int) -> AnalyticsReport:
         report = AnalyticsReport(
             generated_at=datetime.now(UTC).isoformat(), period_days=days
         )
