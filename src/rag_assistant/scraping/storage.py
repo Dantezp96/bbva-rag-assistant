@@ -62,11 +62,25 @@ class ScrapeStorage:
         return path
 
     def iter_raw(self) -> Iterator[RawPage]:
-        """Recorre el HTML ya descargado (permite re-limpiar sin re-crawlear)."""
+        """Recorre el HTML ya descargado (permite re-limpiar sin re-crawlear).
+
+        El manifiesto es un log al que se añade una línea por descarga, así que
+        acumula la misma URL una vez por crawl ejecutado. Se queda con la
+        entrada más reciente de cada URL normalizada: de lo contrario cada
+        re-limpieza procesaría la misma página varias veces y las métricas de
+        indexación contarían chunks que el índice fusiona por ID.
+        """
+        from rag_assistant.scraping.crawler import normalize_url
+
         manifest = self.raw_dir / RAW_MANIFEST
         if not manifest.exists():
             return
+
+        latest: dict[str, dict] = {}
         for entry in self._read_jsonl(manifest):
+            latest[normalize_url(entry["url"])] = entry
+
+        for entry in latest.values():
             path = self.raw_dir / entry["file"]
             if not path.exists():
                 continue

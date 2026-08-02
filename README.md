@@ -456,7 +456,7 @@ esa misma fachada, así que las tres comparten exactamente el mismo comportamien
 | **CLI** | Typer + Rich | Tipado, ayuda automática y salida legible. |
 | **Config** | pydantic-settings | Valida al arrancar. Un `.env` incoherente falla al inicio con un mensaje claro, no a mitad de una ingesta de 15 minutos. |
 | **Logging** | structlog | Consola en desarrollo, JSON en producción sin cambiar código. |
-| **Tests** | pytest | 68 tests sin dependencias externas. |
+| **Tests** | pytest | 79 tests sin dependencias externas. |
 
 ---
 
@@ -498,7 +498,7 @@ bbva-rag-assistant/
 │   ├── ui/streamlit_app.py
 │   ├── cli.py
 │   └── pipelines.py             # orquestación scraping + indexación
-└── tests/                       # 68 tests, sin dependencias externas
+└── tests/                       # 79 tests, sin dependencias externas
 ```
 
 **Regla de dependencias:** `core` no depende de nada; `scraping`, `indexing` y `conversation`
@@ -687,8 +687,22 @@ Enumeradas con honestidad, como pide el enunciado.
    pero no es una verificación formal de que cada afirmación esté respaldada.
 
 9. **Sin evaluación cuantitativa de la calidad del RAG.** No hay un set de preguntas
-   etiquetado ni métricas tipo *recall@k* o *faithfulness*. La calidad se validó
-   manualmente. Es la primera cosa que añadiría (ver siguiente sección).
+   etiquetado ni métricas tipo *recall@k* o *faithfulness*. La calidad se validó con una
+   batería E2E contra el stack real, pero eso comprueba que el sistema funciona, no cuán
+   bien responde. Es la primera cosa que añadiría (ver siguiente sección).
+
+10. **Las preguntas meta sobre la propia conversación no se responden.** *"Resume lo que te
+    acabo de preguntar"* devuelve *"no encontré información"*, porque la etapa de
+    recuperación no halla contexto en el corpus y corta la cadena antes de llamar al LLM
+    ([§9.4](#94-sin-evidencia-no-se-llama-al-llm)). Es el precio de esa decisión, y se
+    asumió a conciencia: para un asistente bancario, garantizar que nunca se responde sin
+    evidencia vale más que atender preguntas conversacionales. Se resuelve clasificando la
+    intención antes de recuperar, y está anotado como mejora.
+
+11. **La búsqueda usa la pregunta literal, no reescrita.** El historial se inyecta en el
+    prompt, así que el LLM resuelve las referencias al redactar; pero la búsqueda vectorial
+    del turno *"¿y hasta qué porcentaje financian?"* se hace con esas siete palabras. En las
+    pruebas funcionó —el reranker rescata el contexto—, pero es frágil. Ver mejora 6.
 
 ---
 
@@ -714,9 +728,9 @@ Por orden de valor por esfuerzo:
    deslizante actual: resumen de lo antiguo + últimos N mensajes literales.
 
 6. **Reescritura de la consulta con el historial.** Convertir *"¿y cuánto cuesta ese?"* en una
-   pregunta autocontenida **antes** de buscar. Hoy el historial ayuda al LLM a redactar, pero
-   la búsqueda vectorial usa la pregunta literal, que en seguimientos es pobre. Mejora clara
-   de recuperación en conversaciones multi-turno.
+   pregunta autocontenida **antes** de buscar (limitación 11). Una llamada barata al LLM que
+   mejora de forma directa la recuperación en conversaciones multi-turno. En la misma
+   pasada se puede clasificar la intención y resolver la limitación 10.
 
 7. **Caché semántica de respuestas.** Preguntas equivalentes reusarían la respuesta,
    recortando coste y latencia. La analítica ya muestra qué temas se repiten.
@@ -742,7 +756,7 @@ No necesitan Docker: la imagen de la aplicación se construye solo con las depen
 ejecución (`pip install .`), sin las de desarrollo, para no cargar la imagen de producción con
 pytest y sus transitivas.
 
-**68 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
+**79 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
 Se inyectan dobles de embeddings, base vectorial, LLM y repositorio. Que esto sea posible es
 la comprobación práctica de que las abstracciones descritas en [§5](#5-patrones-de-diseño)
 sirven para algo.
@@ -764,6 +778,39 @@ Qué cubren:
 
 ```bash
 ruff check src tests    # linter, sin hallazgos
+```
+
+### Validación end-to-end contra el sistema real
+
+Los tests unitarios usan dobles. Para comprobar el sistema completo —scraping real,
+Qdrant, reranker, OpenAI y PostgreSQL— hay un script que ejercita la API en marcha:
+
+```bash
+docker compose up -d && docker compose run --rm ingest    # si aún no lo hiciste
+pip install requests
+python scripts/e2e_check.py
+```
+
+Verifica en 8 bloques: salud y corpus indexado, memoria conversacional multi-turno
+(incluida una pregunta de seguimiento que *solo* se puede resolver con el historial),
+aislamiento entre conversaciones, honestidad ante preguntas fuera del corpus, persistencia,
+feedback, las cuatro familias de métricas y la no exposición de secretos.
+
+Esta batería es la que destapó tres defectos reales que los tests unitarios no podían ver:
+la conexión al LLM rota por comentarios en el `.env`, el coste estimado siempre a cero por
+los identificadores de modelo con fecha, y el `avg_top_score` inválido por mezclar dos
+escalas de puntuación. Los tres están corregidos y cubiertos por tests de regresión.
+
+Resultado sobre la ejecución de referencia (116 páginas rastreadas, 113 documentos
+indexados, 801 fragmentos):
+
+```
+[OK] estado 'ok' con corpus indexado          [OK] turno 2 recuerda los mensajes previos
+[OK] LLM alcanzable                           [OK] una conversación distinta no hereda memoria
+[OK] turno 1 fundamentado en el corpus        [OK] no inventa: se declara sin información
+[OK] similitud vectorial en [0,1]             [OK] los 3 turnos quedaron persistidos
+[OK] reranker presente y separado             [OK] avg_top_score es coseno en [0,1]
+...                                           RESULTADO: TODO CORRECTO
 ```
 
 ---

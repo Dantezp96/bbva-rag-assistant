@@ -132,6 +132,19 @@ def test_reprocesar_desde_crudos_no_requiere_volver_a_rastrear(tmp_path):
     assert recuperadas[0].html == PRODUCT_HTML
 
 
+def test_iter_raw_no_repite_urls_rastreadas_en_varios_crawls(tmp_path):
+    """El manifiesto es un log acumulativo: gana la descarga más reciente."""
+    storage = ScrapeStorage(tmp_path / "raw", tmp_path / "clean")
+    url = "https://www.bbva.com.co/personas/productos/prestamos.html"
+    storage.save_raw(_page(PRODUCT_HTML, url=url))
+    storage.save_raw(_page(PRODUCT_HTML, url=f"{url}?web=wdi:::banner"))
+    storage.save_raw(_page(PRODUCT_HTML.replace("Digital", "Digital v2"), url=url))
+
+    recuperadas = list(storage.iter_raw())
+    assert len(recuperadas) == 1
+    assert "Digital v2" in recuperadas[0].html
+
+
 def test_load_clean_deduplica_por_url(tmp_path):
     """Reindexar una página actualiza su versión, no crea un duplicado."""
     storage = ScrapeStorage(tmp_path / "raw", tmp_path / "clean")

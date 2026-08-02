@@ -28,6 +28,11 @@ class IndexReport:
     documents: int = 0
     chunks: int = 0
     vectors_written: int = 0
+    #: Puntos que quedan en la colección al terminar. Puede ser MENOR que
+    #: `vectors_written`: los IDs son deterministas, así que reescribir el
+    #: mismo contenido actualiza el punto en lugar de duplicarlo. Ver la
+    #: diferencia entre ambos es la señal de cuánta ingesta fue redundante.
+    indexed_total: int = 0
     skipped_documents: int = 0
     elapsed_seconds: float = 0.0
     collection: str = ""
@@ -40,6 +45,7 @@ class IndexReport:
             "documents": self.documents,
             "chunks": self.chunks,
             "vectors_written": self.vectors_written,
+            "indexed_total": self.indexed_total,
             "skipped_documents": self.skipped_documents,
             "elapsed_seconds": round(self.elapsed_seconds, 1),
             "collection": self.collection,
@@ -106,6 +112,14 @@ class IndexingPipeline:
         if buffer:
             report.vectors_written += self._flush(buffer)
 
+        report.indexed_total = self._store.count()
+        if report.indexed_total < report.vectors_written:
+            logger.info(
+                "indexing.deduplicated_by_id",
+                written=report.vectors_written,
+                in_collection=report.indexed_total,
+                note="IDs deterministas: contenido repetido actualizó puntos existentes",
+            )
         report.elapsed_seconds = time.perf_counter() - started
         logger.info("indexing.finished", **report.as_dict())
         return report

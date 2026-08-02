@@ -76,7 +76,7 @@ def test_pipeline_indexa_documentos(settings, fake_embedder, fake_store, sample_
     assert report.documents == 1
     assert report.chunks > 0
     assert report.vectors_written == report.chunks
-    assert fake_store.count() == report.chunks
+    assert report.indexed_total == fake_store.count()
     assert fake_store.recreated is True
     assert fake_store.dimension == fake_embedder.dimension
 
