@@ -37,14 +37,22 @@ class OllamaProvider(LLMProvider):
     def model(self) -> str:
         return self._settings.ollama_model
 
-    def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
         payload = {
             "model": self._settings.ollama_model,
             "messages": messages,
             "stream": False,
             "options": {
-                "temperature": self._settings.llm_temperature,
-                "num_predict": self._settings.llm_max_tokens,
+                "temperature": (
+                    self._settings.llm_temperature if temperature is None else temperature
+                ),
+                "num_predict": max_tokens or self._settings.llm_max_tokens,
             },
         }
         try:

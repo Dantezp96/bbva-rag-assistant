@@ -66,15 +66,23 @@ class OpenAIProvider(LLMProvider):
     def model(self) -> str:
         return self._settings.llm_model
 
-    def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
         import openai
 
         try:
             response = self.client.chat.completions.create(
                 model=self._settings.llm_model,
                 messages=messages,
-                temperature=self._settings.llm_temperature,
-                max_tokens=self._settings.llm_max_tokens,
+                temperature=(
+                    self._settings.llm_temperature if temperature is None else temperature
+                ),
+                max_tokens=max_tokens or self._settings.llm_max_tokens,
             )
         except openai.AuthenticationError as exc:
             raise LLMAuthenticationError(

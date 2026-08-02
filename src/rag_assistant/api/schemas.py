@@ -51,7 +51,14 @@ class ChatResponse(BaseModel):
     grounded: bool = True
     reranked: bool = False
     history_used: int = 0
+    search_query: str = Field(
+        default="",
+        description="Consulta enviada al índice. Difiere del mensaje si se reconstruyó "
+        "con el historial (seguimientos sin sujeto).",
+    )
+    rewritten: bool = False
     latency_ms: int = 0
+    rewrite_ms: int = 0
     retrieval_ms: int = 0
     rerank_ms: int = 0
     llm_ms: int = 0

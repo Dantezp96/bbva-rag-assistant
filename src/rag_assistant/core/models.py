@@ -177,6 +177,12 @@ class RAGAnswer:
     grounded: bool = True
     reranked: bool = False
     history_used: int = 0
+    #: Consulta realmente enviada al índice. Difiere de la pregunta cuando el
+    #: seguimiento se reconstruyó con el historial; exponerla hace depurable
+    #: una recuperación que de otro modo parece magia.
+    search_query: str = ""
+    rewritten: bool = False
+    rewrite_ms: int = 0
     #: ID del mensaje persistido; lo usa la UI para enviar feedback sobre él.
     message_id: int | None = None
 

@@ -42,6 +42,7 @@ from rag_assistant.rag.reranker import CrossEncoderReranker
 from rag_assistant.rag.stages import (
     GenerationStage,
     PromptStage,
+    QueryRewriteStage,
     RAGContext,
     RerankStage,
     RetrievalStage,
@@ -85,14 +86,20 @@ class RAGEngine:
 
     # ------------------------------------------------------------ cadena ---
     def _build_chain(self):
-        stages = [
+        stages: list[Stage] = []
+        # Reescribir la consulta con el historial ANTES de buscar. Añadir esta
+        # capacidad fue añadir un eslabón: ni la recuperación ni la generación
+        # se enteraron. Eso es lo que compra el patrón Chain of Responsibility.
+        if self._settings.query_rewrite_enabled:
+            stages.append(QueryRewriteStage(self._llm))
+        stages.append(
             RetrievalStage(
                 self._embedder,
                 self._store,
                 top_k=self._settings.retrieval_top_k,
                 score_threshold=self._settings.retrieval_score_threshold,
             )
-        ]
+        )
         # El reranker es un eslabón opcional: se añade o no según configuración.
         if self._settings.reranker_enabled:
             stages.append(RerankStage(self._reranker, top_n=self._settings.reranker_top_n))
@@ -190,6 +197,9 @@ class RAGEngine:
             grounded=context.grounded,
             reranked=context.reranked,
             history_used=len(history),
+            search_query=context.search_query or question,
+            rewritten=context.rewritten,
+            rewrite_ms=context.rewrite_ms,
         )
 
         # El ID del mensaje permite que la UI envíe feedback sobre esta respuesta.

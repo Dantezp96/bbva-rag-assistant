@@ -45,6 +45,14 @@ class RAGContext:
     conversation_id: str = ""
     history: list[Message] = field(default_factory=list)
 
+    #: Consulta que se usa para BUSCAR, que no siempre es la que escribió el
+    #: usuario: en un seguimiento como "¿y cuál es el plazo?" hay que
+    #: reconstruirla con el historial antes de tocar el índice. La respuesta,
+    #: en cambio, se redacta siempre sobre `question`.
+    search_query: str = ""
+    rewritten: bool = False
+    rewrite_ms: int = 0
+
     candidates: list[RetrievedChunk] = field(default_factory=list)
     documents: list[RetrievedChunk] = field(default_factory=list)
     messages: list[dict[str, str]] = field(default_factory=list)
@@ -65,7 +73,14 @@ class RAGContext:
 
 
 class Stage(ABC):
-    """Eslabón de la cadena."""
+    """Eslabón de la cadena.
+
+    La cadena efectiva es:
+        reescritura -> recuperación -> reranking -> prompt -> generación
+    Los eslabones primero y tercero son opcionales (`QUERY_REWRITE_ENABLED`,
+    `RERANKER_ENABLED`), y añadir el de reescritura no obligó a tocar ninguno
+    de los demás.
+    """
 
     name: str = "stage"
 
@@ -86,6 +101,98 @@ class Stage(ABC):
     @abstractmethod
     def process(self, context: RAGContext) -> RAGContext:
         """Trabajo propio de la etapa."""
+
+
+_REWRITE_SYSTEM = """\
+Reescribe la ÚLTIMA pregunta del usuario como una consulta de búsqueda \
+autocontenida, resolviendo pronombres y referencias implícitas con el \
+historial ("ese producto", "y el plazo", "cuánto cuesta").
+
+REGLAS:
+- Devuelve SOLO la consulta reescrita, sin comillas ni explicación.
+- Conserva los términos del usuario; añade únicamente el sujeto que falta.
+- Si la pregunta ya se entiende por sí sola, devuélvela tal cual.
+- No respondas la pregunta ni añadas información nueva.
+
+Ejemplo:
+  Historial: usuario: "¿Qué créditos de vivienda ofrecen?"
+  Pregunta:  "¿Cuál es el plazo máximo de ese producto?"
+  Salida:    ¿Cuál es el plazo máximo del crédito de vivienda?
+"""
+
+
+class QueryRewriteStage(Stage):
+    """Reconstruye la consulta de búsqueda usando el historial.
+
+    **El problema que resuelve, medido.** Inyectar el historial en el prompt
+    hace que el LLM *redacte* bien, pero la búsqueda vectorial seguía usando la
+    pregunta literal. Con "¿Cuál es el plazo máximo de ese producto?" —siete
+    palabras, ninguna del dominio— tras una conversación sobre vivienda, el
+    índice devolvía fragmentos sobre CDT y el sistema respondía "36 meses":
+    fiel al contexto recuperado, pero contestando a otro producto.
+
+    Es un fallo silencioso y por eso peligroso: la respuesta viene con fuentes
+    y suena segura. Esta etapa lo corta de raíz reconstruyendo el sujeto antes
+    de tocar el índice.
+
+    Diseño:
+    - Solo actúa si hay historial; una primera pregunta no se toca.
+    - Llamada barata y acotada (pocos tokens, temperatura 0).
+    - Ante cualquier fallo se sigue con la pregunta original: reescribir es una
+      mejora, nunca un punto de caída.
+    - La respuesta se redacta siempre sobre la pregunta ORIGINAL; lo reescrito
+      solo alimenta la búsqueda.
+    """
+
+    name = "rewrite"
+
+    def __init__(self, llm: LLMProvider, *, max_history: int = 4) -> None:
+        super().__init__()
+        self._llm = llm
+        self._max_history = max_history
+
+    def process(self, context: RAGContext) -> RAGContext:
+        context.search_query = context.question
+        if not context.history:
+            return context
+
+        historial = "\n".join(
+            f"{m.role.value}: {m.content[:300]}" for m in context.history[-self._max_history :]
+        )
+        started = time.perf_counter()
+        try:
+            respuesta = self._llm.complete(
+                [
+                    {"role": "system", "content": _REWRITE_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": f"Historial:\n{historial}\n\nPregunta: {context.question}",
+                    },
+                ],
+                max_tokens=80,
+                temperature=0.0,
+            )
+        except Exception as exc:  # noqa: BLE001 - degradación deliberada
+            logger.warning("rag.rewrite_failed", error=str(exc))
+            return context
+
+        nueva = respuesta.content.strip().strip('"').strip()
+        context.rewrite_ms = int((time.perf_counter() - started) * 1000)
+        # Se descartan reescrituras degeneradas (vacías o desproporcionadas):
+        # ante la duda, la pregunta original es la opción segura.
+        if nueva and 3 < len(nueva) <= max(200, len(context.question) * 4):
+            context.search_query = nueva
+            context.rewritten = nueva.lower() != context.question.lower()
+            context.prompt_tokens += respuesta.prompt_tokens
+            context.completion_tokens += respuesta.completion_tokens
+            if context.rewritten:
+                logger.info(
+                    "rag.query_rewritten",
+                    original=context.question[:80],
+                    reescrita=nueva[:80],
+                    ms=context.rewrite_ms,
+                )
+        return context
 
 
 class RetrievalStage(Stage):
@@ -109,7 +216,10 @@ class RetrievalStage(Stage):
 
     def process(self, context: RAGContext) -> RAGContext:
         started = time.perf_counter()
-        vector = self._embedder.embed_query(context.question)
+        # Se busca con `search_query` (reescrita si hubo seguimiento); si la
+        # etapa de reescritura no corrió, es la pregunta original.
+        consulta = context.search_query or context.question
+        vector = self._embedder.embed_query(consulta)
         candidates = self._store.search(
             vector, top_k=self._top_k, score_threshold=self._score_threshold
         )
@@ -139,8 +249,10 @@ class RerankStage(Stage):
         self._top_n = top_n
 
     def process(self, context: RAGContext) -> RAGContext:
+        # El reranker también puntúa contra la consulta reescrita: comparar el
+        # pasaje con "¿y el plazo?" no discrimina nada.
         documents, elapsed_ms, applied = self._reranker.rerank(
-            context.question, context.candidates, top_n=self._top_n
+            context.search_query or context.question, context.candidates, top_n=self._top_n
         )
         context.documents = documents
         context.rerank_ms = elapsed_ms

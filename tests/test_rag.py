@@ -169,6 +169,79 @@ def test_un_fallo_del_llm_no_rompe_el_servicio(settings, fake_embedder, fake_llm
     assert answer.grounded is False
 
 
+# ------------------------------------------------- reescritura de consulta ---
+def _engine_con_reescritura(settings, embedder, store, llm):
+    object.__setattr__(settings, "query_rewrite_enabled", True)
+    return _engine(settings, embedder, store, llm)
+
+
+def test_la_primera_pregunta_no_se_reescribe(settings, fake_embedder, fake_llm):
+    """Sin historial no hay nada que resolver: no se gasta una llamada al LLM."""
+    engine = _engine_con_reescritura(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), fake_llm
+    )
+    r = engine.ask("¿Qué créditos de vivienda ofrecen?", conversation_id="c1")
+    assert r.rewritten is False
+    assert r.search_query == "¿Qué créditos de vivienda ofrecen?"
+    assert len(fake_llm.calls) == 1  # solo la generación
+
+
+def test_un_seguimiento_sin_sujeto_se_reescribe_antes_de_buscar(
+    settings, fake_embedder, fake_llm
+):
+    """Regresión del fallo medido: '¿el plazo máximo de ese producto?' recuperaba CDT.
+
+    Se comprueba que la consulta que llega al índice ya lleva el sujeto, y que
+    la respuesta se sigue redactando sobre la pregunta original del usuario.
+    """
+    fake_llm._content = "¿Cuál es el plazo máximo del crédito de vivienda?"
+    store = FakeVectorStore(results=_chunks(2))
+    engine = _engine_con_reescritura(settings, fake_embedder, store, fake_llm)
+
+    engine.ask("¿Qué créditos de vivienda ofrecen?", conversation_id="c1")
+    r = engine.ask("¿Cuál es el plazo máximo de ese producto?", conversation_id="c1")
+
+    assert r.rewritten is True
+    assert "vivienda" in r.search_query.lower()
+    # La pregunta original, no la reescrita, es la que ve el usuario en el prompt.
+    ultimo_prompt = fake_llm.calls[-1][-1]["content"]
+    assert "¿Cuál es el plazo máximo de ese producto?" in ultimo_prompt
+
+
+def test_si_la_reescritura_falla_se_sigue_con_la_pregunta_original(
+    settings, fake_embedder, fake_llm
+):
+    """Reescribir es una mejora, nunca un punto de caída."""
+
+    class LLMQueFallaAlReescribir(type(fake_llm)):
+        def complete(self, messages, *, max_tokens=None, temperature=None):
+            if max_tokens == 80:  # la llamada de reescritura
+                raise RuntimeError("proveedor caído")
+            return super().complete(messages)
+
+    llm = LLMQueFallaAlReescribir()
+    engine = _engine_con_reescritura(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), llm
+    )
+    engine.ask("pregunta uno", conversation_id="c1")
+    r = engine.ask("¿y el plazo?", conversation_id="c1")
+
+    assert r.rewritten is False
+    assert r.search_query == "¿y el plazo?"
+    assert r.answer  # la respuesta se produjo igualmente
+
+
+def test_se_descarta_una_reescritura_degenerada(settings, fake_embedder, fake_llm):
+    """Si el modelo devuelve basura o un discurso, gana la pregunta original."""
+    fake_llm._content = "x"  # demasiado corta para ser una consulta
+    engine = _engine_con_reescritura(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), fake_llm
+    )
+    engine.ask("pregunta uno", conversation_id="c1")
+    r = engine.ask("¿y el plazo máximo?", conversation_id="c1")
+    assert r.search_query == "¿y el plazo máximo?"
+
+
 def test_pregunta_vacia_no_consume_recursos(settings, fake_embedder, fake_llm):
     engine = _engine(settings, fake_embedder, FakeVectorStore(results=_chunks(1)), fake_llm)
     answer = engine.ask("   ")

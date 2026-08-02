@@ -40,8 +40,19 @@ class LLMProvider(ABC):
         """Identificador del modelo en uso."""
 
     @abstractmethod
-    def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
-        """Genera una respuesta a partir de mensajes en formato chat."""
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        """Genera una respuesta a partir de mensajes en formato chat.
+
+        `max_tokens` y `temperature` permiten que una llamada auxiliar y barata
+        (p. ej. reescribir una consulta) no herede el presupuesto pensado para
+        redactar la respuesta final.
+        """
 
     @abstractmethod
     def health(self) -> bool:

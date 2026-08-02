@@ -115,7 +115,13 @@ class FakeLLM(LLMProvider):
     def model(self) -> str:
         return "fake-model"
 
-    def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
         self.calls.append(messages)
         return LLMResponse(
             content=self._content, model=self.model, prompt_tokens=120, completion_tokens=40

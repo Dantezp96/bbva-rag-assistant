@@ -375,7 +375,8 @@ motor RAG corren **sin base de datos**. Cambiar de SQLite a PostgreSQL fue cambi
 
 📍 `rag/stages.py`
 
-Responder es una secuencia: `RetrievalStage → RerankStage → PromptStage → GenerationStage`.
+Responder es una secuencia:
+`QueryRewriteStage → RetrievalStage → RerankStage → PromptStage → GenerationStage`.
 Cada eslabón enriquece un `RAGContext` compartido y decide si pasa el testigo.
 
 **Por qué aquí, y no un método largo:**
@@ -388,6 +389,11 @@ Cada eslabón enriquece un `RAGContext` compartido y decide si pasa el testigo.
   fallo más grave posible en un asistente bancario.
 - **Observabilidad** — cada etapa mide su propio tiempo, lo que produce el desglose
   `retrieval / rerank / llm` que consume la analítica.
+
+Y la justificación que no es teórica: al probar el sistema apareció un fallo real de
+recuperación en los seguimientos ([§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla)).
+Corregirlo consistió en **añadir un eslabón** al principio de la cadena. Recuperación,
+reranking, prompt y generación no se tocaron.
 
 ### 5.6 Builder
 
@@ -456,7 +462,7 @@ esa misma fachada, así que las tres comparten exactamente el mismo comportamien
 | **CLI** | Typer + Rich | Tipado, ayuda automática y salida legible. |
 | **Config** | pydantic-settings | Valida al arrancar. Un `.env` incoherente falla al inicio con un mensaje claro, no a mitad de una ingesta de 15 minutos. |
 | **Logging** | structlog | Consola en desarrollo, JSON en producción sin cambiar código. |
-| **Tests** | pytest | 79 tests sin dependencias externas. |
+| **Tests** | pytest | 83 tests sin dependencias externas. |
 
 ---
 
@@ -498,7 +504,7 @@ bbva-rag-assistant/
 │   ├── ui/streamlit_app.py
 │   ├── cli.py
 │   └── pipelines.py             # orquestación scraping + indexación
-└── tests/                       # 79 tests, sin dependencias externas
+└── tests/                       # 83 tests, sin dependencias externas
 ```
 
 **Regla de dependencias:** `core` no depende de nada; `scraping`, `indexing` y `conversation`
@@ -515,6 +521,8 @@ Todo se controla desde `.env`. Los parámetros que más afectan al comportamient
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | **`HISTORY_WINDOW_SIZE`** | `6` | **N mensajes previos que recuerda el sistema.** Cuenta mensajes, no turnos: 6 ≈ los 3 últimos intercambios. |
+| `QUERY_REWRITE_ENABLED` | `true` | Reconstruye la consulta con el historial antes de buscar ([§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla)). |
+| `ONNX_THREADS` | `0` (auto) | Hilos por modelo ONNX. `0` = mitad de los núcleos, medido como óptimo ([§9.7](#97-usar-todos-los-núcleos-era-22-más-lento-que-usar-la-mitad)). |
 | `LLM_PROVIDER` / `LLM_MODEL` | `openai` / `gpt-4o-mini` | Proveedor y modelo. |
 | `LLM_TEMPERATURE` | `0.1` | Baja a propósito: se quiere fidelidad al contexto, no creatividad. |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `900` / `150` | Tamaño y solapamiento de los fragmentos. |
@@ -641,7 +649,60 @@ Si el cross-encoder no puede cargarse (sin red en el primer arranque, disco llen
 el aviso y se continúa con el orden vectorial. Un reranker caído nunca debe dejar el chat sin
 servicio: la respuesta será algo peor, no inexistente.
 
-### 9.7 IDs de chunk deterministas
+### 9.7 Usar todos los núcleos era 2,2× más lento que usar la mitad
+
+Midiendo el sistema bajo carga apareció que `rag-api` consumía **862% de CPU de media y
+1298% en pico** en una máquina de 12 núcleos, y que el reranking pasaba de 3,7 s con una
+petición a 32 s con veinte —mientras el tiempo de LLM se mantenía plano en 1,9 s, porque
+está en la red y no compite—.
+
+La causa no era "falta de CPU". Aislando el cross-encoder en un microbenchmark
+(`scripts/micro_threads.py`, 20 pasajes reales, mediana de 5 ejecuciones):
+
+| Hilos ONNX | top_k=20 | top_k=12 | top_k=5 |
+|---|---|---|---|
+| `auto` (todos, default de ONNX) | 2.100 ms | 901 ms | 706 ms |
+| 4 | 1.166 ms | 682 ms | 251 ms |
+| **6 (mitad de los núcleos)** | **955 ms** | **522 ms** | 227 ms |
+| 12 (explícito) | 1.329 ms | 829 ms | 458 ms |
+
+El lote es pequeño, así que repartirlo entre 12 hilos cuesta más en sincronización de lo
+que ahorra en cómputo: **el valor por defecto de ONNX era el peor de todos los probados**.
+Y dejar núcleos libres es además lo que permite que dos peticiones concurrentes avancen en
+paralelo en vez de pelearse.
+
+Por eso `ONNX_THREADS=0` (automático) resuelve a la mitad de los núcleos disponibles.
+Es un caso claro de por qué conviene medir antes de "optimizar": la intuición decía
+*"dale todos los núcleos"* y la intuición estaba equivocada.
+
+### 9.8 La búsqueda necesitaba reescribir la consulta, no solo recordarla
+
+Inyectar el historial en el prompt hace que el modelo *redacte* bien los seguimientos, pero
+la búsqueda vectorial seguía usando la pregunta literal. El fallo se reprodujo así:
+
+```
+Tú  › ¿Qué créditos de vivienda ofrecen?
+Bot › [correcto: modalidades de vivienda]
+Tú  › ¿Cuál es el plazo máximo de ese producto?
+Bot › El plazo máximo para los CDT es de 36 meses.      ← producto equivocado
+```
+
+Siete palabras, ninguna del dominio: el índice devolvió fragmentos sobre CDT y el modelo
+respondió con fidelidad… a un contexto que no era el pedido. Es el peor tipo de error,
+porque llega con fuentes citadas y suena seguro.
+
+La solución es `QueryRewriteStage`: reconstruye el sujeto con el historial **antes** de
+tocar el índice. La respuesta se sigue redactando sobre la pregunta original; lo reescrito
+solo alimenta la búsqueda y el reranking, y se expone en la respuesta (`search_query`) para
+que la recuperación sea depurable. Si la reescritura falla o degenera, se continúa con la
+pregunta original: es una mejora, nunca un punto de caída.
+
+Merece la pena señalar qué costó añadirla: **un eslabón nuevo en la cadena**. Ni la
+recuperación, ni el reranking, ni la generación se enteraron. Eso es lo que se compra con
+el patrón Chain of Responsibility ([§5.5](#55-chain-of-responsibility)), y es la
+justificación práctica de haberlo elegido.
+
+### 9.9 IDs de chunk deterministas
 
 El ID se deriva de `url + índice + hash del texto`. Reindexar el mismo contenido **actualiza**
 el punto en vez de duplicarlo, así que la ingesta es idempotente y se puede repetir sin
@@ -699,10 +760,19 @@ Enumeradas con honestidad, como pide el enunciado.
     evidencia vale más que atender preguntas conversacionales. Se resuelve clasificando la
     intención antes de recuperar, y está anotado como mejora.
 
-11. **La búsqueda usa la pregunta literal, no reescrita.** El historial se inyecta en el
-    prompt, así que el LLM resuelve las referencias al redactar; pero la búsqueda vectorial
-    del turno *"¿y hasta qué porcentaje financian?"* se hace con esas siete palabras. En las
-    pruebas funcionó —el reranker rescata el contexto—, pero es frágil. Ver mejora 6.
+11. **La reescritura de consulta añade una llamada al LLM por turno de seguimiento.**
+    Resolver la limitación descrita en [§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla)
+    cuesta ~700–1.300 ms y ~150 tokens extra cuando hay historial. Es un intercambio
+    consciente: sin ella, los seguimientos recuperaban el producto equivocado. Se desactiva
+    con `QUERY_REWRITE_ENABLED=false`. Una versión sin coste sería clasificar primero si la
+    pregunta es autocontenida (con una heurística o un modelo diminuto) y reescribir solo
+    cuando haga falta.
+
+12. **El rendimiento bajo concurrencia sigue limitado por CPU.** Acotar los hilos de ONNX
+    ([§9.7](#97-usar-todos-los-núcleos-era-22-más-lento-que-usar-la-mitad)) mejoró mucho las
+    cosas, pero el reranking sigue siendo inferencia en CPU y es la etapa dominante. Para
+    concurrencia alta de verdad haría falta GPU, un reranker más pequeño, o mover el
+    reranking a un servicio aparte que se escale por su cuenta.
 
 ---
 
@@ -727,10 +797,11 @@ Por orden de valor por esfuerzo:
 5. **Resumen progresivo del historial** para conversaciones largas, combinado con la ventana
    deslizante actual: resumen de lo antiguo + últimos N mensajes literales.
 
-6. **Reescritura de la consulta con el historial.** Convertir *"¿y cuánto cuesta ese?"* en una
-   pregunta autocontenida **antes** de buscar (limitación 11). Una llamada barata al LLM que
-   mejora de forma directa la recuperación en conversaciones multi-turno. En la misma
-   pasada se puede clasificar la intención y resolver la limitación 10.
+6. **Clasificar la intención antes de reescribir.** La reescritura de consulta ya está
+   implementada ([§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla)),
+   pero se ejecuta en todo turno con historial. Detectar antes si la pregunta ya es
+   autocontenida ahorraría esa llamada, y en la misma pasada permitiría reconocer las
+   preguntas meta sobre la propia conversación (limitación 10).
 
 7. **Caché semántica de respuestas.** Preguntas equivalentes reusarían la respuesta,
    recortando coste y latencia. La analítica ya muestra qué temas se repiten.
@@ -756,7 +827,7 @@ No necesitan Docker: la imagen de la aplicación se construye solo con las depen
 ejecución (`pip install .`), sin las de desarrollo, para no cargar la imagen de producción con
 pytest y sus transitivas.
 
-**79 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
+**83 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
 Se inyectan dobles de embeddings, base vectorial, LLM y repositorio. Que esto sea posible es
 la comprobación práctica de que las abstracciones descritas en [§5](#5-patrones-de-diseño)
 sirven para algo.
@@ -771,6 +842,9 @@ Qué cubren:
 - prompt: orden de mensajes, presupuesto de contexto, intercalado del historial;
 - **memoria conversacional**: aislamiento por ID, ventana de N configurable, respuestas
   huérfanas, override por petición;
+- **reescritura de consulta**: no se reescribe la primera pregunta, sí los seguimientos sin
+  sujeto, se descartan reescrituras degeneradas, y un fallo del proveedor no impide
+  responder;
 - cortocircuito sin contexto (no se llama al LLM) y degradación ante fallo del LLM;
 - contrato HTTP completo, incluidos los códigos de error;
 - analítica: recorrido del histórico, preguntas sin responder, temas, páginas citadas,
