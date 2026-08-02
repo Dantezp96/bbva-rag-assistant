@@ -59,10 +59,15 @@ class CrossEncoderReranker:
             try:
                 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-                logger.info("reranker.loading", model=self._settings.reranker_model)
+                logger.info(
+                    "reranker.loading",
+                    model=self._settings.reranker_model,
+                    threads=self._settings.effective_onnx_threads,
+                )
                 self._model = TextCrossEncoder(
                     model_name=self._settings.reranker_model,
                     cache_dir=str(self._settings.model_cache_dir),
+                    threads=self._settings.effective_onnx_threads,
                 )
                 logger.info("reranker.ready", model=self._settings.reranker_model)
             except Exception as exc:  # noqa: BLE001 - degradación deliberada

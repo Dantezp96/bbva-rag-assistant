@@ -58,6 +58,7 @@ class FastEmbedProvider(EmbeddingProvider):
                 self._model = TextEmbedding(
                     model_name=self._settings.embedding_model,
                     cache_dir=str(self._settings.model_cache_dir),
+                    threads=self._settings.effective_onnx_threads,
                 )
                 probe = next(iter(self._model.embed(["dimension probe"])))
                 self._dimension = len(probe)

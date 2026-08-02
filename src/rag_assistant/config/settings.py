@@ -14,6 +14,7 @@ idiomático en Python, thread-safe y permite limpiar la caché en tests
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -63,6 +64,16 @@ class Settings(BaseSettings):
     embedding_dimension: int = Field(default=384, gt=0)
     embedding_batch_size: int = Field(default=32, gt=0)
     model_cache_dir: Path = Path("./models_cache")
+    #: Hilos de ONNX Runtime por modelo. 0 = automático (mitad de los núcleos).
+    #: Medido sobre el reranker real con 20 pasajes en una máquina de 12 núcleos:
+    #:     todos los núcleos (default de ONNX) .... 2100 ms
+    #:     6 hilos ................................  955 ms   <- 2,2x más rápido
+    #:     12 hilos explícitos .................... 1329 ms
+    #: Con lotes pequeños, repartir entre 12 hilos cuesta más en sincronización
+    #: de lo que ahorra en cómputo. Además, dejar núcleos libres evita que dos
+    #: peticiones concurrentes se peleen por la CPU en vez de avanzar en
+    #: paralelo. Ver §9.8 del README.
+    onnx_threads: int = Field(default=0, ge=0)
 
     # ------------------------------------------------------- vector store ---
     vector_store_provider: VectorStoreProvider = "qdrant"
@@ -108,6 +119,10 @@ class Settings(BaseSettings):
     chunk_min_size: int = Field(default=120, ge=0)
 
     # -------------------------------------------- recuperación + reranker ---
+    #: Reescribe la consulta con el historial antes de buscar. Corrige los
+    #: seguimientos sin sujeto ("¿y el plazo máximo?"), que de otro modo
+    #: recuperan el producto equivocado. Cuesta una llamada corta al LLM.
+    query_rewrite_enabled: bool = True
     retrieval_top_k: int = Field(default=20, gt=0)
     retrieval_score_threshold: float = Field(default=0.30, ge=0.0, le=1.0)
     reranker_enabled: bool = True
@@ -183,6 +198,13 @@ class Settings(BaseSettings):
         return self
 
     # ---------------------------------------------------------- utilidades --
+    @property
+    def effective_onnx_threads(self) -> int:
+        """Hilos a usar por modelo ONNX, resolviendo el modo automático."""
+        if self.onnx_threads:
+            return self.onnx_threads
+        return max(2, (os.cpu_count() or 4) // 2)
+
     @property
     def deny_regexes(self) -> list[re.Pattern[str]]:
         return [re.compile(pattern) for pattern in self.scraper_url_deny_patterns]
