@@ -45,6 +45,7 @@ from rag_assistant.rag.stages import (
     RAGContext,
     RerankStage,
     RetrievalStage,
+    Stage,
     build_chain,
 )
 
@@ -271,13 +272,18 @@ class RAGEngine:
         )
 
 
-class _TruncateStage(RerankStage):
-    """Sustituto del reranker cuando está desactivado: solo recorta a top-N."""
+class _TruncateStage(Stage):
+    """Sustituto del reranker cuando está desactivado: solo recorta a top-N.
+
+    Mantener un eslabón en su lugar (en vez de omitirlo) deja la cadena con la
+    misma forma en ambas configuraciones: las etapas siguientes siempre
+    encuentran `context.documents` poblado.
+    """
 
     name = "truncate"
 
     def __init__(self, *, limit: int) -> None:
-        super().__init__(CrossEncoderReranker(), top_n=limit)
+        super().__init__()
         self._limit = limit
 
     def process(self, context: RAGContext) -> RAGContext:

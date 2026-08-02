@@ -53,6 +53,8 @@ if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = f"ui-{uuid.uuid4().hex[:10]}"
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "rated" not in st.session_state:
+    st.session_state.rated = set()
 
 
 # --------------------------------------------------------------- sidebar ----
@@ -79,8 +81,14 @@ with st.sidebar:
         st.stop()
 
     st.divider()
-    st.text_input("ID de conversación", key="conversation_id")
+    # Sin `key=`: usar key="conversation_id" convertiría esa entrada de
+    # session_state en propiedad del widget, y Streamlit prohíbe modificarla
+    # después (lo hacemos al recibir la respuesta de la API y al reiniciar).
+    typed_id = st.text_input("ID de conversación", value=st.session_state.conversation_id)
     st.caption("Reutiliza un ID para retomar una conversación anterior.")
+    if typed_id and typed_id != st.session_state.conversation_id:
+        st.session_state.conversation_id = typed_id
+        st.session_state.messages = []
 
     if st.button("🆕 Nueva conversación", use_container_width=True):
         st.session_state.conversation_id = f"ui-{uuid.uuid4().hex[:10]}"
@@ -92,6 +100,40 @@ with st.sidebar:
 
 
 # ------------------------------------------------------------------ CHAT ----
+def _render_sources(sources: list[dict]) -> None:
+    if not sources:
+        return
+    with st.expander(f"📚 Fuentes ({len(sources)})"):
+        for source in sources:
+            st.markdown(
+                f"**[{source['index']}]** [{source['title'] or source['url']}]"
+                f"({source['url']}) · relevancia `{source['score']:.3f}`"
+            )
+
+
+def _render_feedback(message_id: int) -> None:
+    """Valoración de una respuesta.
+
+    Se dibuja al recorrer el historial, no dentro del turno que generó la
+    respuesta: al pulsar un botón Streamlit reejecuta el script desde cero, y
+    un botón creado solo en el turno de la respuesta ya no existiría en esa
+    reejecución, así que su pulsación nunca llegaría a procesarse.
+    """
+    if message_id in st.session_state.rated:
+        st.caption("Gracias por tu valoración.")
+        return
+
+    col_up, col_down, _ = st.columns([1, 1, 10])
+    if col_up.button("👍", key=f"up-{message_id}", help="Respuesta útil"):
+        api_post("/chat/feedback", {"message_id": message_id, "value": 1})
+        st.session_state.rated.add(message_id)
+        st.rerun()
+    if col_down.button("👎", key=f"down-{message_id}", help="Respuesta no útil"):
+        api_post("/chat/feedback", {"message_id": message_id, "value": -1})
+        st.session_state.rated.add(message_id)
+        st.rerun()
+
+
 def render_chat() -> None:
     st.header("Conversación")
     st.caption(
@@ -103,23 +145,19 @@ def render_chat() -> None:
         st.info(
             "**Ejemplos de preguntas**\n\n"
             "- ¿Qué tipos de cuenta de ahorro ofrece BBVA Colombia?\n"
-            "- ¿Cuáles son los requisitos para un crédito de vivienda?\n"
-            "- ¿Qué tarjetas de crédito tienen disponibles?\n"
+            "- ¿Hasta qué porcentaje financia BBVA un crédito de vivienda?\n"
+            "- ¿Qué plazos tiene el crédito de vehículo?\n"
             "- ¿Qué es un CDT y qué modalidades hay?"
         )
 
     for entry in st.session_state.messages:
         with st.chat_message(entry["role"]):
             st.markdown(entry["content"])
-            if entry.get("sources"):
-                with st.expander(f"📚 Fuentes ({len(entry['sources'])})"):
-                    for source in entry["sources"]:
-                        st.markdown(
-                            f"**[{source['index']}]** [{source['title'] or source['url']}]"
-                            f"({source['url']}) · relevancia `{source['score']:.3f}`"
-                        )
+            _render_sources(entry.get("sources", []))
             if entry.get("meta"):
                 st.caption(entry["meta"])
+            if entry["role"] == "assistant" and entry.get("message_id"):
+                _render_feedback(entry["message_id"])
 
     prompt = st.chat_input("Escribe tu pregunta…")
     if not prompt:
@@ -133,42 +171,11 @@ def render_chat() -> None:
         try:
             data = api_post(
                 "/chat",
-                {
-                    "message": prompt,
-                    "conversation_id": st.session_state.conversation_id,
-                },
+                {"message": prompt, "conversation_id": st.session_state.conversation_id},
             )
         except Exception as exc:  # noqa: BLE001
             st.error(f"Error al consultar la API: {exc}")
             return
-
-        st.markdown(data["answer"])
-        if data.get("sources"):
-            with st.expander(f"📚 Fuentes ({len(data['sources'])})"):
-                for source in data["sources"]:
-                    st.markdown(
-                        f"**[{source['index']}]** [{source['title'] or source['url']}]"
-                        f"({source['url']}) · relevancia `{source['score']:.3f}`"
-                    )
-
-        meta = (
-            f"⏱️ {data['latency_ms']} ms "
-            f"(recuperación {data['retrieval_ms']} · rerank {data['rerank_ms']} · "
-            f"LLM {data['llm_ms']}) · "
-            f"🎫 {data['prompt_tokens'] + data['completion_tokens']} tokens · "
-            f"🧠 historial: {data['history_used']} msg · "
-            f"{'✅ fundamentada' if data['grounded'] else '⚠️ sin respaldo en el corpus'}"
-        )
-        st.caption(meta)
-
-        if data.get("message_id"):
-            col_up, col_down, _ = st.columns([1, 1, 8])
-            if col_up.button("👍", key=f"up-{data['message_id']}"):
-                api_post("/chat/feedback", {"message_id": data["message_id"], "value": 1})
-                st.toast("¡Gracias por tu valoración!")
-            if col_down.button("👎", key=f"down-{data['message_id']}"):
-                api_post("/chat/feedback", {"message_id": data["message_id"], "value": -1})
-                st.toast("Anotado, lo tendremos en cuenta.")
 
     st.session_state.conversation_id = data["conversation_id"]
     st.session_state.messages.append(
@@ -176,9 +183,20 @@ def render_chat() -> None:
             "role": "assistant",
             "content": data["answer"],
             "sources": data.get("sources", []),
-            "meta": meta,
+            "message_id": data.get("message_id"),
+            "meta": (
+                f"⏱️ {data['latency_ms']} ms "
+                f"(recuperación {data['retrieval_ms']} · rerank {data['rerank_ms']} · "
+                f"LLM {data['llm_ms']}) · "
+                f"🎫 {data['prompt_tokens'] + data['completion_tokens']} tokens · "
+                f"🧠 historial: {data['history_used']} msg · "
+                f"{'✅ fundamentada' if data['grounded'] else '⚠️ sin respaldo en el corpus'}"
+            ),
         }
     )
+    # Se reejecuta para que la respuesta se pinte por el mismo camino que el
+    # historial y sus botones de valoración queden vivos.
+    st.rerun()
 
 
 # ------------------------------------------------------------- ANALÍTICA ----
