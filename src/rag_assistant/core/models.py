@@ -166,6 +166,8 @@ class RAGAnswer:
     grounded: bool = True
     reranked: bool = False
     history_used: int = 0
+    #: ID del mensaje persistido; lo usa la UI para enviar feedback sobre él.
+    message_id: int | None = None
 
     @property
     def total_tokens(self) -> int:
