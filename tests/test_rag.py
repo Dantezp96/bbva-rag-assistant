@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from tests.conftest import FakeVectorStore
 
 from rag_assistant.conversation import InMemoryConversationRepository
@@ -37,6 +38,15 @@ def test_prompt_incluye_sistema_contexto_y_pregunta():
     assert "¿Qué cuentas de ahorro hay?" in messages[-1]["content"]
     assert "[1]" in messages[-1]["content"] and "[2]" in messages[-1]["content"]
     assert [c.index for c in citations] == [1, 2]
+
+
+def test_la_cita_separa_similitud_vectorial_de_puntuacion_del_reranker():
+    """No deben mezclarse: coseno está en [0,1] y el reranker devuelve logits."""
+    chunk = _chunks(1)[0]
+    chunk.rerank_score = 6.42
+    _, citations = PromptBuilder().with_context([chunk]).with_question("q").build()
+    assert citations[0].score == pytest.approx(0.9)
+    assert citations[0].rerank_score == pytest.approx(6.42)
 
 
 def test_prompt_respeta_el_presupuesto_de_contexto():

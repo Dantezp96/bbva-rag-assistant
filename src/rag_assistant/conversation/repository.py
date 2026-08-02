@@ -149,9 +149,9 @@ class SqlConversationRepository(ConversationRepository):
                 rerank_ms=answer.rerank_ms,
                 llm_ms=answer.llm_ms,
                 retrieved_count=len(answer.retrieved),
-                top_score=round(
-                    max((c.effective_score for c in answer.retrieved), default=0.0), 4
-                ),
+                # Se persiste la similitud vectorial, no la del reranker: es la
+                # única comparable entre consultas (ver `Citation`).
+                top_score=round(max((c.score for c in answer.retrieved), default=0.0), 4),
                 grounded=answer.grounded,
                 reranked=answer.reranked,
                 history_used=answer.history_used,

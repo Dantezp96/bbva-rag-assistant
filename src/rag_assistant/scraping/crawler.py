@@ -71,16 +71,24 @@ class CrawlReport:
         }
 
 
+#: Parámetros de campaña/analítica: no cambian el contenido, solo generan URLs
+#: distintas para la misma página. `web` es el que usa BBVA en sus banners
+#: internos y, sin filtrarlo, la misma página de préstamos entraba varias veces
+#: al índice y competía consigo misma en la recuperación.
+_TRACKING_PARAM_PREFIXES = (
+    "utm_", "gclid", "fbclid", "msclkid", "mc_cid", "mc_eid", "_ga", "web",
+)
+
+
 def normalize_url(url: str) -> str:
     """Normaliza para deduplicar: sin fragmento, sin query de tracking, sin `/` final."""
     url, _ = urldefrag(url)
     parsed = urlparse(url)
     path = parsed.path.rstrip("/") or "/"
-    # Los parámetros de campaña generan URLs distintas con el mismo contenido.
     query = "&".join(
         part
         for part in parsed.query.split("&")
-        if part and not part.split("=")[0].lower().startswith(("utm_", "gclid", "fbclid"))
+        if part and not part.split("=")[0].lower().startswith(_TRACKING_PARAM_PREFIXES)
     )
     return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", query, ""))
 

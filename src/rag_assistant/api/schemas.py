@@ -36,7 +36,11 @@ class SourceOut(BaseModel):
     index: int
     url: str
     title: str
-    score: float
+    score: float = Field(..., description="Similitud coseno de la búsqueda vectorial, en [0, 1]")
+    rerank_score: float | None = Field(
+        default=None,
+        description="Logit del cross-encoder si se aplicó reranking. Solo ordena; no acotado.",
+    )
 
 
 class ChatResponse(BaseModel):

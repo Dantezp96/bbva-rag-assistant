@@ -102,7 +102,10 @@ class PromptBuilder:
                     index=position,
                     url=chunk.url,
                     title=chunk.title,
-                    score=round(chunk.effective_score, 4),
+                    score=round(chunk.score, 4),
+                    rerank_score=(
+                        round(chunk.rerank_score, 4) if chunk.rerank_score is not None else None
+                    ),
                 )
             )
 

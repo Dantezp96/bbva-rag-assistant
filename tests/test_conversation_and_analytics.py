@@ -168,6 +168,27 @@ def test_el_informe_recorre_el_historico_completo(sql_repo):
     assert report.models_used == {"gpt-4o-mini": 3}
 
 
+def test_el_coste_reconoce_los_ids_con_fecha_que_devuelve_la_api(sql_repo):
+    """Regresión: la API responde con la instantánea (`gpt-4o-mini-2024-07-18`).
+
+    Con búsqueda exacta en la tabla de precios el coste salía siempre 0.
+    """
+    from rag_assistant.analytics.service import _pricing_for
+
+    assert _pricing_for("gpt-4o-mini-2024-07-18") == _pricing_for("gpt-4o-mini")
+    assert _pricing_for("modelo-inexistente") == (0.0, 0.0)
+    # El prefijo más largo gana: 'gpt-4o-mini-...' no debe tarifarse como 'gpt-4o'.
+    assert _pricing_for("gpt-4o-mini-2024-07-18") != _pricing_for("gpt-4o-2024-08-06")
+
+    sql_repo.ensure_conversation("c1")
+    sql_repo.add_user_message("c1", "pregunta")
+    sql_repo.add_assistant_message("c1", _answer("c1", model="gpt-4o-mini-2024-07-18"))
+
+    report = AnalyticsService().report()
+    assert report.estimated_cost_usd > 0
+    assert report.untariffed_models == []
+
+
 def test_el_informe_detecta_preguntas_sin_responder(sql_repo):
     """La métrica más accionable: qué contenido falta por indexar."""
     sql_repo.ensure_conversation("c1")

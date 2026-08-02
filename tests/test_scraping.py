@@ -49,6 +49,8 @@ def _page(html: str, url: str = "https://www.bbva.com.co/personas/cuentas/ahorro
         ("https://www.bbva.com.co/a.html#seccion", "https://www.bbva.com.co/a.html"),
         ("https://www.bbva.com.co/a?utm_source=x&id=7", "https://www.bbva.com.co/a?id=7"),
         ("https://www.bbva.com.co", "https://www.bbva.com.co/"),
+        # `web=` es el parámetro de campaña de los banners internos de BBVA.
+        ("https://www.bbva.com.co/p.html?web=wdi:::0002-home-banner", "https://www.bbva.com.co/p.html"),
     ],
 )
 def test_normalize_url(entrada, esperado):
@@ -136,4 +138,13 @@ def test_load_clean_deduplica_por_url(tmp_path):
     doc = clean_page(_page(PRODUCT_HTML))
     storage.save_clean(doc)
     storage.save_clean(doc)
+    assert len(storage.load_clean()) == 1
+
+
+def test_load_clean_deduplica_variantes_con_parametros_de_campana(tmp_path):
+    """La misma página con `?web=...` no debe entrar dos veces al índice."""
+    storage = ScrapeStorage(tmp_path / "raw", tmp_path / "clean")
+    base = "https://www.bbva.com.co/personas/productos/prestamos.html"
+    storage.save_clean(clean_page(_page(PRODUCT_HTML, url=base)))
+    storage.save_clean(clean_page(_page(PRODUCT_HTML, url=f"{base}?web=wdi:::banner")))
     assert len(storage.load_clean()) == 1

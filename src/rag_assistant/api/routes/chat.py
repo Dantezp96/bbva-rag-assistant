@@ -37,7 +37,13 @@ def chat(request: ChatRequest, engine: RAGEngine = Depends(get_engine)) -> ChatR
         conversation_id=answer.conversation_id,
         message_id=answer.message_id,
         sources=[
-            SourceOut(index=c.index, url=c.url, title=c.title, score=c.score)
+            SourceOut(
+                index=c.index,
+                url=c.url,
+                title=c.title,
+                score=c.score,
+                rerank_score=c.rerank_score,
+            )
             for c in answer.citations
         ],
         grounded=answer.grounded,

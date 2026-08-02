@@ -41,15 +41,33 @@ from rag_assistant.core.models import Role
 
 logger = get_logger(__name__)
 
-#: Precio por 1M de tokens (USD) de los modelos usados con más frecuencia.
-#: Sirve para dar una estimación de coste; si el modelo no está en la tabla se
-#: informa 0 y se marca `cost_is_estimate=False`.
+#: Precio por 1M de tokens (USD): (entrada, salida). Solo para estimar coste.
 _PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
 }
+
+
+def _pricing_for(model: str | None) -> tuple[float, float]:
+    """Precio del modelo, tolerando los identificadores con fecha.
+
+    La API no devuelve el alias que se le pidió sino la instantánea concreta
+    que atendió la petición (`gpt-4o-mini` -> `gpt-4o-mini-2024-07-18`). Una
+    búsqueda exacta falla siempre contra la respuesta real y el coste se
+    reporta como 0. Se resuelve por prefijo más largo, que además absorbe
+    futuras instantáneas sin tocar la tabla.
+    """
+    if not model:
+        return (0.0, 0.0)
+    normalized = model.lower().removeprefix("models/")
+    if normalized in _PRICING_USD_PER_MTOK:
+        return _PRICING_USD_PER_MTOK[normalized]
+    matches = [key for key in _PRICING_USD_PER_MTOK if normalized.startswith(key)]
+    if not matches:
+        return (0.0, 0.0)
+    return _PRICING_USD_PER_MTOK[max(matches, key=len)]
 
 #: Palabras vacías del español: sin filtrarlas, el "top de temas" son artículos.
 _STOPWORDS = {
@@ -105,6 +123,8 @@ class AnalyticsReport:
     estimated_cost_usd: float = 0.0
     cost_per_conversation_usd: float = 0.0
     models_used: dict[str, int] = field(default_factory=dict)
+    #: Modelos sin tarifa conocida: su consumo NO está contado en el coste.
+    untariffed_models: list[str] = field(default_factory=list)
 
     # 4. Contenido
     top_topics: list[dict[str, Any]] = field(default_factory=list)
@@ -289,11 +309,15 @@ class AnalyticsService:
                 .group_by(MessageEntity.model)
             ).all()
             cost = 0.0
+            untariffed: set[str] = set()
             for model, count, prompt_sum, completion_sum in model_rows:
                 report.models_used[model] = count
-                price_in, price_out = _PRICING_USD_PER_MTOK.get(model, (0.0, 0.0))
+                price_in, price_out = _pricing_for(model)
+                if not price_in and not price_out:
+                    untariffed.add(model)
                 cost += (prompt_sum or 0) / 1e6 * price_in
                 cost += (completion_sum or 0) / 1e6 * price_out
+            report.untariffed_models = sorted(untariffed)
             report.estimated_cost_usd = round(cost, 6)
             if report.total_conversations:
                 report.cost_per_conversation_usd = round(

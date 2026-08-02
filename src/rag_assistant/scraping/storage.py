@@ -90,7 +90,16 @@ class ScrapeStorage:
         return path
 
     def load_clean(self) -> list[CleanDocument]:
-        """Carga el corpus limpio, deduplicando por URL (gana la última versión)."""
+        """Carga el corpus limpio, deduplicando por URL normalizada.
+
+        La deduplicación se repite aquí —el crawler ya normaliza al descubrir
+        enlaces— porque el corpus en disco puede venir de ejecuciones anteriores
+        con reglas de normalización distintas. Sin esto, una misma página
+        guardada dos veces con parámetros de campaña distintos entra dos veces
+        al índice y compite consigo misma en la recuperación.
+        """
+        from rag_assistant.scraping.crawler import normalize_url
+
         corpus = self.clean_dir / CLEAN_CORPUS
         by_url: dict[str, CleanDocument] = {}
 
@@ -103,7 +112,7 @@ class ScrapeStorage:
             )
         )
         for entry in entries:
-            by_url[entry["url"]] = CleanDocument(
+            by_url[normalize_url(entry["url"])] = CleanDocument(
                 url=entry["url"],
                 title=entry.get("title", ""),
                 text=entry.get("text", ""),

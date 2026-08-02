@@ -105,9 +105,12 @@ def _render_sources(sources: list[dict]) -> None:
         return
     with st.expander(f"📚 Fuentes ({len(sources)})"):
         for source in sources:
+            detalle = f"similitud `{source['score']:.3f}`"
+            if source.get("rerank_score") is not None:
+                detalle += f" · reranker `{source['rerank_score']:+.2f}`"
             st.markdown(
                 f"**[{source['index']}]** [{source['title'] or source['url']}]"
-                f"({source['url']}) · relevancia `{source['score']:.3f}`"
+                f"({source['url']}) · {detalle}"
             )
 
 

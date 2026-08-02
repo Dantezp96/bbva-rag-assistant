@@ -130,12 +130,23 @@ class RetrievedChunk:
 
 @dataclass(slots=True)
 class Citation:
-    """Fuente citada en una respuesta."""
+    """Fuente citada en una respuesta.
+
+    Se guardan las dos puntuaciones por separado a propósito: la del reranker
+    es un logit sin acotar (valores típicos de -10 a +10) mientras que la
+    vectorial es una similitud coseno en [0, 1]. Mezclarlas en un solo campo
+    hace que la métrica agregada `avg_top_score` no signifique nada, porque
+    promediaría magnitudes de escalas distintas según si el reranker actuó.
+    """
 
     index: int
     url: str
     title: str
+    #: Similitud coseno de la búsqueda vectorial, en [0, 1]. Comparable entre
+    #: consultas y a lo largo del tiempo: es la que alimenta la analítica.
     score: float
+    #: Logit del cross-encoder, si el reranking se aplicó. Solo ordena.
+    rerank_score: float | None = None
 
 
 @dataclass(slots=True)
