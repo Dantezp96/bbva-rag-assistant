@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.conftest import FakeVectorStore
+from tests.test_rag import _chunks
 
 from rag_assistant.conversation import InMemoryConversationRepository
 from rag_assistant.rag import RAGEngine
-
-from tests.conftest import FakeVectorStore
-from tests.test_rag import _chunks
 
 
 @pytest.fixture
@@ -107,12 +106,14 @@ def test_conversacion_inexistente_devuelve_404(client):
 
 def test_feedback_se_registra(client):
     message_id = client.post("/chat", json={"message": "hola"}).json()["message_id"]
-    assert client.post("/chat/feedback", json={"message_id": message_id, "value": 1}).status_code == 204
+    response = client.post("/chat/feedback", json={"message_id": message_id, "value": 1})
+    assert response.status_code == 204
 
 
 def test_feedback_invalido_devuelve_400(client):
     message_id = client.post("/chat", json={"message": "hola"}).json()["message_id"]
-    assert client.post("/chat/feedback", json={"message_id": message_id, "value": 7}).status_code == 400
+    response = client.post("/chat/feedback", json={"message_id": message_id, "value": 7})
+    assert response.status_code == 400
 
 
 def test_analitica_en_vivo_cuenta_las_consultas(client):

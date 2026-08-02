@@ -19,9 +19,9 @@ segundos y sin volver a molestar al servidor de BBVA.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 from rag_assistant.core.logging import get_logger
 from rag_assistant.core.models import CleanDocument, RawPage

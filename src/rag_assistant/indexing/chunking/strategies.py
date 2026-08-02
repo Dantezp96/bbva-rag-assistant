@@ -83,7 +83,6 @@ class FixedChunker(ChunkingStrategy):
 
     def split(self, text: str) -> list[str]:
         text = re.sub(r"\s+", " ", text).strip()
-        step = max(1, self.chunk_size - self.chunk_overlap)
         chunks: list[str] = []
         start = 0
         while start < len(text):

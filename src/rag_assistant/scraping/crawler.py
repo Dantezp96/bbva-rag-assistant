@@ -182,7 +182,7 @@ class SiteCrawler:
                 while True:
                     try:
                         url, depth = await asyncio.wait_for(queue.get(), timeout=5.0)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         return  # cola vacía y estable: este worker termina
 
                     try:

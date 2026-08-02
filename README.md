@@ -733,13 +733,14 @@ Por orden de valor por esfuerzo:
 ## 12. Tests
 
 ```bash
-# Con el entorno local
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 pytest -q
-
-# Dentro de Docker
-docker compose run --rm ingest pytest -q
 ```
+
+No necesitan Docker: la imagen de la aplicación se construye solo con las dependencias de
+ejecución (`pip install .`), sin las de desarrollo, para no cargar la imagen de producción con
+pytest y sus transitivas.
 
 **68 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
 Se inyectan dobles de embeddings, base vectorial, LLM y repositorio. Que esto sea posible es

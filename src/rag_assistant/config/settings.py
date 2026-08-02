@@ -17,10 +17,10 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 LLMProvider = Literal["openai", "ollama"]
 EmbeddingProvider = Literal["fastembed"]
@@ -73,19 +73,31 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ scraper ---
     scraper_base_url: str = "https://www.bbva.com.co/"
-    scraper_allowed_domains: list[str] = Field(default_factory=lambda: ["www.bbva.com.co"])
+    # `NoDecode` desactiva el parseo JSON automático de pydantic-settings para
+    # estos campos: en el `.env` se declaran como CSV legible (`a,b,c`), no como
+    # `["a","b","c"]`. El validador `_split_csv` hace la conversión.
+    scraper_allowed_domains: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["www.bbva.com.co"]
+    )
     scraper_fetcher: FetcherKind = "browser"
+    #: Canal de navegador para el fetcher `browser`. "chrome" = Google Chrome
+    #: estable, el único que supera la protección anti-bot de bbva.com.co en
+    #: modo headless. Vacío = usar el Chromium empaquetado por Playwright.
+    scraper_browser_channel: str | None = "chrome"
     scraper_max_pages: int = Field(default=120, gt=0)
     scraper_max_depth: int = Field(default=3, ge=0)
     scraper_concurrency: int = Field(default=4, gt=0)
     scraper_request_delay: float = Field(default=0.5, ge=0.0)
     scraper_timeout_seconds: int = Field(default=45, gt=0)
+    #: Espera adicional (ms) a que la red se calme tras DOMContentLoaded, para
+    #: recoger el contenido que inyecta JavaScript. 0 lo desactiva.
+    scraper_settle_ms: int = Field(default=2000, ge=0)
     scraper_respect_robots: bool = True
     scraper_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
-    scraper_url_deny_patterns: list[str] = Field(default_factory=list)
+    scraper_url_deny_patterns: Annotated[list[str], NoDecode] = Field(default_factory=list)
     raw_data_dir: Path = Path("./data/raw")
     clean_data_dir: Path = Path("./data/clean")
 
@@ -115,7 +127,7 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_url: str = "http://localhost:8000"
     ui_port: int = 8501
-    api_cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    api_cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     # ------------------------------------------------------- validadores ----
     @field_validator(
@@ -131,7 +143,10 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
-    @field_validator("openai_api_key", "openai_base_url", "qdrant_api_key", mode="before")
+    @field_validator(
+        "openai_api_key", "openai_base_url", "qdrant_api_key", "scraper_browser_channel",
+        mode="before",
+    )
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         """Una variable declarada pero vacía en `.env` equivale a "no configurada"."""

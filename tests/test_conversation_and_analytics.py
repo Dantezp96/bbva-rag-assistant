@@ -11,7 +11,7 @@ from rag_assistant.conversation import (
     SqlConversationRepository,
     init_database,
 )
-from rag_assistant.core.exceptions import ConversationNotFoundError
+from rag_assistant.core.exceptions import ConversationError, ConversationNotFoundError
 from rag_assistant.core.models import Citation, RAGAnswer, RetrievedChunk
 
 
@@ -33,17 +33,19 @@ def sql_repo(settings, monkeypatch):
 
 
 def _answer(conversation_id: str, texto: str = "Respuesta [1]", **kwargs) -> RAGAnswer:
-    defaults = dict(
-        citations=[
+    defaults = {
+        "citations": [
             Citation(index=1, url="https://www.bbva.com.co/ahorro.html", title="Ahorro", score=0.87)
         ],
-        retrieved=[
-            RetrievedChunk(id="c1", text="t", url="https://www.bbva.com.co/ahorro.html",
-                           title="Ahorro", score=0.87)
+        "retrieved": [
+            RetrievedChunk(
+                id="c1", text="t", url="https://www.bbva.com.co/ahorro.html",
+                title="Ahorro", score=0.87,
+            )
         ],
-        latency_ms=1200, retrieval_ms=90, rerank_ms=210, llm_ms=880,
-        prompt_tokens=800, completion_tokens=120, model="gpt-4o-mini",
-    )
+        "latency_ms": 1200, "retrieval_ms": 90, "rerank_ms": 210, "llm_ms": 880,
+        "prompt_tokens": 800, "completion_tokens": 120, "model": "gpt-4o-mini",
+    }
     defaults.update(kwargs)
     return RAGAnswer(answer=texto, conversation_id=conversation_id, **defaults)
 
@@ -94,7 +96,7 @@ def test_feedback_solo_admite_1_o_menos_1(sql_repo):
     sql_repo.ensure_conversation("c1")
     message_id = sql_repo.add_assistant_message("c1", _answer("c1"))
     sql_repo.set_feedback(message_id, 1)
-    with pytest.raises(Exception):
+    with pytest.raises(ConversationError, match="1 \\(útil\\) o -1"):
         sql_repo.set_feedback(message_id, 5)
 
 
@@ -170,7 +172,9 @@ def test_el_informe_detecta_preguntas_sin_responder(sql_repo):
     """La métrica más accionable: qué contenido falta por indexar."""
     sql_repo.ensure_conversation("c1")
     sql_repo.add_user_message("c1", "¿Cuál es el horario de la oficina de Chapinero?")
-    sql_repo.add_assistant_message("c1", _answer("c1", "No encontré esa información", grounded=False))
+    sql_repo.add_assistant_message(
+        "c1", _answer("c1", "No encontré esa información", grounded=False)
+    )
 
     report = AnalyticsService().report()
     assert report.grounded_rate == 0.0

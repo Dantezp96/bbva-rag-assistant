@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from tests.conftest import FakeVectorStore
+
 from rag_assistant.conversation import InMemoryConversationRepository
 from rag_assistant.core.models import Message, RetrievedChunk, Role
 from rag_assistant.rag import RAGEngine
 from rag_assistant.rag.prompt_builder import PromptBuilder
 from rag_assistant.rag.stages import NO_CONTEXT_ANSWER
-
-from tests.conftest import FakeVectorStore
 
 
 def _chunks(n: int = 3) -> list[RetrievedChunk]:
@@ -44,7 +44,8 @@ def test_prompt_respeta_el_presupuesto_de_contexto():
         RetrievedChunk(id="x", text="a" * 5000, url="https://x", title="T", score=0.9)
         for _ in range(5)
     ]
-    messages, _ = PromptBuilder(context_max_chars=1200).with_context(largos).with_question("q").build()
+    builder = PromptBuilder(context_max_chars=1200).with_context(largos).with_question("q")
+    messages, _ = builder.build()
     assert len(messages[-1]["content"]) < 3000
 
 

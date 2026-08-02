@@ -13,7 +13,9 @@ _REGISTRY: dict[str, type[ChunkingStrategy]] = {
 }
 
 
-def create_chunker(settings: Settings | None = None, *, strategy: str | None = None) -> ChunkingStrategy:
+def create_chunker(
+    settings: Settings | None = None, *, strategy: str | None = None
+) -> ChunkingStrategy:
     settings = settings or get_settings()
     resolved = (strategy or settings.chunk_strategy).lower()
     try:

@@ -38,10 +38,13 @@ class Fetcher(ABC):
     ) -> None:
         await self.shutdown()
 
-    async def startup(self) -> None:
+    # Hooks opcionales, no abstractos a propósito: una estrategia sin recursos
+    # que reservar (un doble de test, por ejemplo) no debería verse obligada a
+    # implementarlos.
+    async def startup(self) -> None:  # noqa: B027
         """Reserva recursos costosos (navegador, pool de conexiones)."""
 
-    async def shutdown(self) -> None:
+    async def shutdown(self) -> None:  # noqa: B027
         """Libera los recursos reservados en `startup`."""
 
     @abstractmethod

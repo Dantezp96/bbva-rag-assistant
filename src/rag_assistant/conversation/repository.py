@@ -34,7 +34,11 @@ class ConversationRepository(ABC):
 
     @abstractmethod
     def ensure_conversation(
-        self, conversation_id: str | None = None, *, user_id: str | None = None, channel: str = "api"
+        self,
+        conversation_id: str | None = None,
+        *,
+        user_id: str | None = None,
+        channel: str = "api",
     ) -> str:
         """Devuelve el ID de la conversación, creándola si hace falta."""
 
@@ -75,7 +79,11 @@ class SqlConversationRepository(ConversationRepository):
     """Implementación sobre SQLAlchemy (PostgreSQL o SQLite)."""
 
     def ensure_conversation(
-        self, conversation_id: str | None = None, *, user_id: str | None = None, channel: str = "api"
+        self,
+        conversation_id: str | None = None,
+        *,
+        user_id: str | None = None,
+        channel: str = "api",
     ) -> str:
         resolved = (conversation_id or "").strip() or f"conv-{uuid.uuid4().hex[:12]}"
         try:
@@ -280,7 +288,11 @@ class InMemoryConversationRepository(ConversationRepository):
         self._next_id = 1
 
     def ensure_conversation(
-        self, conversation_id: str | None = None, *, user_id: str | None = None, channel: str = "api"
+        self,
+        conversation_id: str | None = None,
+        *,
+        user_id: str | None = None,
+        channel: str = "api",
     ) -> str:
         resolved = (conversation_id or "").strip() or f"conv-{uuid.uuid4().hex[:12]}"
         now = datetime.now(UTC)
@@ -305,7 +317,12 @@ class InMemoryConversationRepository(ConversationRepository):
             return []
         stored = self._messages.get(conversation_id, [])[-limit:]
         return [
-            Message(id=m["id"], role=Role(m["role"]), content=m["content"], created_at=m["created_at"])
+            Message(
+                id=m["id"],
+                role=Role(m["role"]),
+                content=m["content"],
+                created_at=m["created_at"],
+            )
             for m in stored
         ]
 
@@ -354,7 +371,11 @@ class InMemoryConversationRepository(ConversationRepository):
             self._conversations.values(), key=lambda c: c["updated_at"], reverse=True
         )
         return [
-            {**c, "created_at": c["created_at"].isoformat(), "updated_at": c["updated_at"].isoformat()}
+            {
+                **c,
+                "created_at": c["created_at"].isoformat(),
+                "updated_at": c["updated_at"].isoformat(),
+            }
             for c in ordered[offset : offset + limit]
         ]
 
@@ -373,6 +394,8 @@ class InMemoryConversationRepository(ConversationRepository):
         }
 
     def set_feedback(self, message_id: int, value: int) -> None:
+        if value not in (-1, 1):
+            raise ConversationError("El feedback debe ser 1 (útil) o -1 (no útil)")
         for messages in self._messages.values():
             for message in messages:
                 if message["id"] == message_id:

@@ -193,16 +193,17 @@ class AnalyticsService:
             ]
 
             # ---------------------------------------------- 2. calidad ------
-            answers = select(MessageEntity).where(
-                MessageEntity.role == Role.ASSISTANT.value, *msg_filter
-            )
             quality = session.execute(
                 select(
                     func.count().label("total"),
-                    func.sum(case((MessageEntity.grounded.is_(True), 1), else_=0)).label("grounded"),
+                    func.sum(case((MessageEntity.grounded.is_(True), 1), else_=0)).label(
+                        "grounded"
+                    ),
                     func.sum(case((MessageEntity.error.is_not(None), 1), else_=0)).label("errors"),
                     func.sum(case((MessageEntity.retrieved_count == 0, 1), else_=0)).label("empty"),
-                    func.sum(case((MessageEntity.reranked.is_(True), 1), else_=0)).label("reranked"),
+                    func.sum(case((MessageEntity.reranked.is_(True), 1), else_=0)).label(
+                        "reranked"
+                    ),
                     func.avg(cast(MessageEntity.retrieved_count, Float)).label("avg_chunks"),
                     func.avg(MessageEntity.top_score).label("avg_score"),
                 )
