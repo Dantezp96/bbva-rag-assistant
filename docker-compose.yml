@@ -1,0 +1,158 @@
+# =============================================================================
+#  Sistema RAG — BBVA Colombia
+#
+#  Levantar todo con un solo comando:
+#      docker compose up -d --build
+#
+#  Ingestar el sitio (scraping + indexación):
+#      docker compose run --rm ingest
+#
+#  Servicios:
+#    qdrant    base de datos vectorial (self-hosted, sin cuenta ni coste)
+#    postgres  historial de conversaciones y analítica
+#    api       FastAPI + motor RAG          -> http://localhost:8000/docs
+#    ui        interfaz web Streamlit       -> http://localhost:8501
+#    ingest    job puntual de scraping+indexación (perfil `tools`, no arranca solo)
+#    ollama    LLM local opcional, coste cero (perfil `ollama`)
+# =============================================================================
+
+name: bbva-rag
+
+services:
+  # ------------------------------------------------------------- qdrant ----
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # API REST y panel web
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__ENABLE_TLS: "false"
+      QDRANT__LOG_LEVEL: "INFO"
+    healthcheck:
+      # La imagen no trae curl ni wget: se usa el healthcheck TCP de bash.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [ragnet]
+
+  # ----------------------------------------------------------- postgres ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpass}
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [ragnet]
+
+  # ---------------------------------------------------------------- api ----
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    image: bbva-rag-app:latest
+    container_name: rag-api
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # Dentro de la red de compose los servicios se resuelven por nombre;
+      # esto sobrescribe cualquier valor "localhost" que traiga el .env.
+      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD:-ragpass}@postgres:5432/${POSTGRES_DB:-ragdb}
+      MODEL_CACHE_DIR: /app/models_cache
+      RAW_DATA_DIR: /app/data/raw
+      CLEAN_DATA_DIR: /app/data/clean
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Corpus y modelos persisten fuera del contenedor: reconstruir la imagen
+      # no obliga a volver a rastrear el sitio ni a redescargar los modelos.
+      - ./data:/app/data
+      - models_cache:/app/models_cache
+    depends_on:
+      qdrant: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    networks: [ragnet]
+
+  # ----------------------------------------------------------------- ui ----
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    image: bbva-rag-ui:latest
+    container_name: rag-ui
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    depends_on:
+      api: {condition: service_started}
+    networks: [ragnet]
+
+  # ------------------------------------------------------------- ingest ----
+  # Job puntual, no un servicio: `docker compose run --rm ingest`.
+  # El perfil `tools` evita que `docker compose up` lo arranque solo.
+  ingest:
+    image: bbva-rag-app:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: rag-ingest
+    profiles: [tools]
+    env_file: [.env]
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-raguser}:${POSTGRES_PASSWORD:-ragpass}@postgres:5432/${POSTGRES_DB:-ragdb}
+      MODEL_CACHE_DIR: /app/models_cache
+      RAW_DATA_DIR: /app/data/raw
+      CLEAN_DATA_DIR: /app/data/clean
+    volumes:
+      - ./data:/app/data
+      - models_cache:/app/models_cache
+    depends_on:
+      qdrant: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    command: ["rag-assistant", "ingest"]
+    networks: [ragnet]
+
+  # ------------------------------------------------------------- ollama ----
+  # LLM local sin coste. Activar con:  docker compose --profile ollama up -d
+  # y luego:  docker compose exec ollama ollama pull llama3.2:3b
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    profiles: [ollama]
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks: [ragnet]
+
+networks:
+  ragnet:
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+  postgres_data:
+  models_cache:
+  ollama_models:
