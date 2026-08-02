@@ -875,8 +875,42 @@ la conexión al LLM rota por comentarios en el `.env`, el coste estimado siempre
 los identificadores de modelo con fecha, y el `avg_top_score` inválido por mezclar dos
 escalas de puntuación. Los tres están corregidos y cubiertos por tests de regresión.
 
-Resultado sobre la ejecución de referencia (116 páginas rastreadas, 113 documentos
-indexados, 801 fragmentos):
+### Campaña de pruebas exigentes
+
+Además del E2E funcional se sometió el sistema en marcha a cuatro baterías. Los scripts
+están en `scripts/`. Resumen de lo medido:
+
+**Rendimiento** (`bench_rendimiento.py`) — latencia secuencial p50/p95/p99, desglose por
+etapa, concurrencia 1/2/5/10/20 y una conversación de 12 turnos. Reveló que el reranking
+era el 63% de la latencia y que el consumo de CPU (862% de media, 1298% en pico) venía de
+sobresuscripción de hilos, no de falta de máquina → corregido en
+[§9.7](#97-usar-todos-los-núcleos-era-22-más-lento-que-usar-la-mitad).
+
+**Calidad** — 12 preguntas con hechos verificados manualmente contra el sitio:
+**12/12 datos correctos, 12/12 fuente correcta, 92% fundamentadas**. Cuatro preguntas
+fuera del corpus: **4/4 rechazadas** sin inventar. Y tres cadenas conversacionales, que
+destaparon el fallo de recuperación multi-turno → corregido en
+[§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla).
+
+**Robustez y seguridad** — más de 40 comprobaciones, **todas correctas**: límites del
+contrato (mensaje vacío, 2001 caracteres, JSON malformado, método incorrecto), entradas
+extremas (emojis, símbolos, HTML/script, texto repetitivo), **4 inyecciones SQL** en el
+`conversation_id` (las tablas sobrevivieron: SQLAlchemy parametriza), **5 inyecciones de
+prompt** (ignorar instrucciones, cambio de rol, filtrar el system prompt, forzar
+invención, falsa autoridad — todas rechazadas), idempotencia y ausencia de fuga de
+secretos en `/config`, `/health` y en los mensajes de error.
+
+**Resiliencia** (`e2e_resiliencia.py`, destructiva pero reversible) — se paran Qdrant y
+PostgreSQL y se comprueba que el sistema **explica el problema y se recupera solo**.
+Destapó que una base caída devolvía 400 y 500 opacos → corregido a 503 con mensaje limpio.
+Arranque en frío: 22 s hasta `ok`, 5,8 s la primera consulta.
+
+**UI** — Lighthouse: *Best Practices* 100, *Accessibility* 94, cero errores de consola. Los
+fallos restantes son marcado generado por Streamlit y métricas de indexación pública
+(`meta-description`, `robots.txt`) que no aplican a una herramienta interna.
+
+Resultado del E2E funcional sobre la ejecución de referencia (116 páginas rastreadas,
+113 documentos indexados, 801 fragmentos):
 
 ```
 [OK] estado 'ok' con corpus indexado          [OK] turno 2 recuerda los mensajes previos

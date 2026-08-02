@@ -95,6 +95,10 @@ print()
 print("=" * 78)
 print("6. FEEDBACK")
 print("=" * 78)
+# Se mide el INCREMENTO, no el total: el histórico puede traer valoraciones de
+# ejecuciones anteriores y una aserción absoluta fallaría por datos previos, no
+# por un defecto del sistema.
+antes = requests.get(f"{API}/analytics", timeout=60).json()
 mid = t1["message_id"]
 r = requests.post(f"{API}/chat/feedback", json={"message_id": mid, "value": 1}, timeout=30)
 check("feedback positivo aceptado (204)", r.status_code == 204, f"status={r.status_code}")
@@ -126,7 +130,13 @@ check("desglosa latencia por etapa", a["avg_retrieval_ms"] > 0 and a["avg_llm_ms
 check("avg_top_score es una similitud coseno en [0,1]", 0 < a["avg_top_score"] <= 1,
       f"valor={a['avg_top_score']}")
 check("estima coste", a["estimated_cost_usd"] > 0)
-check("registra satisfacción", a["feedback_positive"] == 1 and a["feedback_negative"] == 1)
+check(
+    "registra satisfacción",
+    a["feedback_positive"] == antes["feedback_positive"] + 1
+    and a["feedback_negative"] == antes["feedback_negative"] + 1,
+    f"+{a['feedback_positive'] - antes['feedback_positive']} / "
+    f"-{a['feedback_negative'] - antes['feedback_negative']}",
+)
 check("extrae temas consultados", len(a["top_topics"]) > 0)
 check("extrae páginas más citadas", len(a["top_cited_pages"]) > 0)
 check("detecta preguntas sin responder", len(a["unanswered_questions"]) > 0)
