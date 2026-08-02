@@ -19,6 +19,14 @@ from rag_assistant.rag.llm.base import LLMProvider, LLMResponse
 
 logger = get_logger(__name__)
 
+#: Endpoint por defecto. Se pasa SIEMPRE de forma explícita al SDK: si se le
+#: entrega `base_url=None`, el SDK lee `OPENAI_BASE_URL` del entorno por su
+#: cuenta, y una variable declarada pero vacía en el `.env` (caso habitual)
+#: llega como cadena vacía, no como ausente. El resultado es un
+#: `httpx.UnsupportedProtocol` envuelto en un `APIConnectionError` genérico
+#: —"Connection error"— que apunta a la red cuando el problema es la URL.
+_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
 
 class OpenAIProvider(LLMProvider):
     """Adaptador sobre el SDK oficial de OpenAI."""
@@ -44,11 +52,15 @@ class OpenAIProvider(LLMProvider):
 
             self._client = OpenAI(
                 api_key=self._settings.openai_api_key,
-                base_url=self._settings.openai_base_url or None,
+                base_url=self._settings.openai_base_url or _DEFAULT_BASE_URL,
                 timeout=self._settings.llm_timeout_seconds,
                 max_retries=self._settings.llm_max_retries,
             )
         return self._client
+
+    @property
+    def base_url(self) -> str:
+        return self._settings.openai_base_url or _DEFAULT_BASE_URL
 
     @property
     def model(self) -> str:
@@ -73,6 +85,13 @@ class OpenAIProvider(LLMProvider):
             raise LLMRateLimitError(
                 "OpenAI aplicó rate limiting",
                 detail="Reintenta en unos segundos o reduce la concurrencia.",
+            ) from exc
+        except openai.APIConnectionError as exc:
+            # El SDK envuelve cualquier fallo de transporte en un genérico
+            # "Connection error"; la causa original es lo único accionable.
+            raise LLMError(
+                "No se pudo conectar con OpenAI",
+                detail=f"{exc.__cause__ or exc} (base_url={self.base_url})",
             ) from exc
         except openai.APIError as exc:
             raise LLMError("Error en la API de OpenAI", detail=str(exc)) from exc

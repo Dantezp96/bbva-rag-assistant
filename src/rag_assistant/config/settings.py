@@ -154,6 +154,25 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("openai_base_url", "ollama_base_url", "qdrant_url", mode="after")
+    @classmethod
+    def _require_scheme(cls, value: str | None, info) -> str | None:
+        """Rechaza URLs sin esquema en lugar de dejarlas llegar al cliente HTTP.
+
+        Un `.env` con comentarios en línea (`CLAVE=  # nota`) puede acabar
+        asignando el comentario como valor según qué parser lo lea. Sin esta
+        comprobación el síntoma aparece mucho más tarde y muy desorientado: el
+        SDK de OpenAI lo envuelve en un `APIConnectionError` genérico
+        —"Connection error"— que hace pensar en un problema de red.
+        """
+        if value and not value.startswith(("http://", "https://")):
+            raise ValueError(
+                f"{info.field_name.upper()} debe empezar por http:// o https:// "
+                f"(valor recibido: {value!r}). Revisa el .env: los comentarios "
+                f"deben ir en su propia línea, no detrás del valor."
+            )
+        return value
+
     @model_validator(mode="after")
     def _check_coherence(self) -> Settings:
         if self.chunk_overlap >= self.chunk_size:
