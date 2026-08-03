@@ -27,6 +27,12 @@ data/clean/*
 .cache/
 models_cache/
 
+# --- Frontend (Next.js) ------------------------------------------------------
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+frontend/.env*.local
+
 # --- Local infra volumes -----------------------------------------------------
 qdrant_storage/
 postgres_data/

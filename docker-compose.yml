@@ -11,7 +11,7 @@
 #    qdrant    base de datos vectorial (self-hosted, sin cuenta ni coste)
 #    postgres  historial de conversaciones y analítica
 #    api       FastAPI + motor RAG          -> http://localhost:8000/docs
-#    ui        interfaz web Streamlit       -> http://localhost:8501
+#    ui        interfaz web Next.js         -> http://localhost:3000
 #    ingest    job puntual de scraping+indexación (perfil `tools`, no arranca solo)
 #    ollama    LLM local opcional, coste cero (perfil `ollama`)
 # =============================================================================
@@ -95,14 +95,16 @@ services:
   ui:
     build:
       context: .
-      dockerfile: docker/Dockerfile.ui
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        # La resuelve el navegador del usuario, no el contenedor: por eso es
+        # la URL publicada en el host y no `http://api:8000`.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
     image: bbva-rag-ui:latest
     container_name: rag-ui
     restart: unless-stopped
-    environment:
-      API_URL: http://api:8000
     ports:
-      - "${UI_PORT:-8501}:8501"
+      - "${UI_PORT:-3000}:3000"
     depends_on:
       api: {condition: service_started}
     networks: [ragnet]

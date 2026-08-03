@@ -12,8 +12,8 @@ Todo el stack se levanta con **un solo comando**.
 │ com.co  │   Playwright  │ raw+clean│   embeddings  │        │
 └─────────┘   + Chrome    └──────────┘   fastembed   └────┬───┘
                                                           │ top-20
-┌──────────┐      ┌──────────┐      ┌──────────────┐      │
-│ Streamlit│─────▶│ FastAPI  │─────▶│ reranker     │◀─────┘
+┌──────────┐  SSE ┌──────────┐      ┌──────────────┐      │
+│ Next.js  │─────▶│ FastAPI  │─────▶│ reranker     │◀─────┘
 │    CLI   │ HTTP │ RAGEngine│      │ cross-encoder│  top-5
 └──────────┘      └────┬─────┘      └──────┬───────┘
                        │                   ▼
@@ -98,7 +98,7 @@ Esto construye las imágenes y arranca cuatro servicios:
 | `qdrant` | 6333 | Base de datos vectorial (self-hosted) |
 | `postgres` | 5432 | Historial de conversaciones y analítica |
 | `api` | 8000 | FastAPI + motor RAG |
-| `ui` | 8501 | Interfaz web conversacional |
+| `ui` | 3000 | Interfaz web conversacional (Next.js) |
 
 La primera construcción tarda varios minutos (instala Google Chrome en la imagen de la API).
 Comprueba que todo esté sano:
@@ -138,13 +138,13 @@ docker compose run --rm ingest rag-assistant ingest --max-pages 25
 curl http://localhost:8000/health     # debe devolver "ok" e indexed_chunks > 0
 ```
 
-Abre **http://localhost:8501** y pregunta.
+Abre **http://localhost:3000** y pregunta.
 
 ---
 
 ## 3. Cómo usar el sistema
 
-### 3.1 Interfaz web — http://localhost:8501
+### 3.1 Interfaz web — http://localhost:3000
 
 La vista **Chat** mantiene la conversación con memoria. Cada respuesta muestra:
 
@@ -470,12 +470,40 @@ esa misma fachada, así que las tres comparten exactamente el mismo comportamien
 | **Reranker** | `Xenova/ms-marco-MiniLM-L-6-v2` vía fastembed | Cross-encoder ligero, local y gratuito. Aporta la mejora de precisión del bonus sin añadir dependencias ni coste. |
 | **LLM** | OpenAI `gpt-4o-mini` · alternativa Ollama | En RAG el modelo no necesita "saber", solo redactar fielmente a partir del contexto: un modelo pequeño y barato es la elección correcta. Ollama cubre el caso de coste cero. |
 | **API** | FastAPI + Uvicorn | Validación con Pydantic (los mismos modelos que la configuración), OpenAPI automático, async nativo. |
-| **UI** | Streamlit | El enunciado pide *"funcional y limpia, no bonita"*. Streamlit da un chat con estado y un panel de métricas en un fichero, sin frontend que mantener. |
+| **UI** | Next.js 16 + React 19 + Tailwind 4 | Empezó siendo Streamlit; se reemplazó al añadir streaming (ver [§6.1](#61-por-qué-la-interfaz-dejó-de-ser-streamlit)). |
 | **Historial** | PostgreSQL 16 + SQLAlchemy 2.0 | El requisito de analítica es agregación sobre el histórico: eso es SQL. SQLAlchemy permite además correr sobre SQLite en local sin infraestructura. |
 | **CLI** | Typer + Rich | Tipado, ayuda automática y salida legible. |
 | **Config** | pydantic-settings | Valida al arrancar. Un `.env` incoherente falla al inicio con un mensaje claro, no a mitad de una ingesta de 15 minutos. |
 | **Logging** | structlog | Consola en desarrollo, JSON en producción sin cambiar código. |
-| **Tests** | pytest | 83 tests sin dependencias externas. |
+| **Tests** | pytest | 99 tests sin dependencias externas. |
+
+### 6.1 Por qué la interfaz dejó de ser Streamlit
+
+La primera versión fue Streamlit, y la justificación era razonable: el enunciado pide una
+interfaz *"funcional y limpia, no bonita"*, y Streamlit daba chat con estado y panel de
+métricas en un solo fichero de 339 líneas, sin frontend que mantener.
+
+Lo que rompió ese cálculo fue el **streaming**. Streamlit reejecuta el script entero en cada
+interacción; con ese modelo, mostrar la respuesta palabra a palabra mientras el modelo
+escribe es forzar la herramienta. Y el streaming no es cosmética: la primera palabra aparece
+a los **3,6 s** en vez de a los **7,6 s**, y entre medias la interfaz puede decir en qué
+etapa va —*buscando*, *priorizando fuentes*, *redactando*— en vez de mostrar un spinner mudo.
+
+Medido, el cambio salió a favor en todo lo comprobable:
+
+| | Streamlit | Next.js |
+|---|---|---|
+| Imagen Docker | 556 MB | **216 MB** |
+| Lighthouse · Accesibilidad | 94 | **100** |
+| Lighthouse · Buenas prácticas | 100 | **100** |
+| Lighthouse · SEO | 82 | **100** |
+| Auditorías fallidas | 6 | **0** |
+| Primera palabra en pantalla | 7,6 s | **3,6 s** |
+
+Lo que se paga a cambio, y conviene decirlo: **el proyecto deja de ser solo Python**. Ahora
+hay un toolchain de Node en el build, un `package.json` que mantener y una superficie de
+dependencias mayor. Para un equipo que solo sabe Python, Streamlit seguiría siendo la
+respuesta correcta.
 
 ---
 
@@ -486,7 +514,11 @@ bbva-rag-assistant/
 ├── docker-compose.yml           # 4 servicios + 2 perfiles opcionales
 ├── docker/
 │   ├── Dockerfile.app           # API + CLI (multi-etapa, incluye Google Chrome)
-│   └── Dockerfile.ui            # Streamlit (imagen ligera aparte)
+│   └── Dockerfile.frontend      # Next.js (build multi-etapa, salida standalone)
+├── frontend/                    # interfaz web
+│   ├── app/                     # rutas: chat y analítica
+│   ├── components/              # Chat, Answer, Sources, Telemetry, Dashboard
+│   └── lib/api.ts               # cliente HTTP + consumo del stream SSE
 ├── .env.example                 # TODA la configuración, documentada
 ├── Makefile
 ├── data/
@@ -514,10 +546,10 @@ bbva-rag-assistant/
 │   ├── conversation/            # Repository + memoria de N mensajes
 │   ├── analytics/               # Observer + métricas de impacto
 │   ├── api/                     # FastAPI
-│   ├── ui/streamlit_app.py
+│   ├── api/routes/chat.py       # incluye POST /chat/stream (SSE)
 │   ├── cli.py
 │   └── pipelines.py             # orquestación scraping + indexación
-└── tests/                       # 83 tests, sin dependencias externas
+└── tests/                       # 99 tests, sin dependencias externas
 ```
 
 **Regla de dependencias:** `core` no depende de nada; `scraping`, `indexing` y `conversation`
@@ -732,7 +764,34 @@ original**. Si el usuario no aportó ninguna (*"¿y eso?"*), no hay nada que pre
 acepta —que es justo cuando reescribir hace más falta—. Está cubierto por tests de
 regresión con el caso literal que falló.
 
-### 9.9 IDs de chunk deterministas
+### 9.9 El streaming reutiliza la cadena, no la duplica
+
+Servir la respuesta por partes podría haber significado un segundo pipeline en paralelo al
+existente —y dos sitios donde arreglar cada bug—. En vez de eso, `ask_stream()` **recorre los
+mismos eslabones** y solo corta antes de la generación, que es la única etapa capaz de emitir
+por partes. Reescritura, recuperación, reranking y construcción del prompt se ejecutan
+idénticos y siguen midiendo sus tiempos, así que **la telemetría es la misma en ambos modos**
+y el turno se persiste igual.
+
+Recorrer la cadena paso a paso en lugar de delegar en `handle()` tiene además una ventaja de
+producto: permite anunciar **qué etapa está en curso**. Antes de la primera palabra pasan
+unos 3,5 s; sin avisar, el usuario ve un spinner mudo y el sistema parece colgado. Nombrando
+la etapa —*buscando en el contenido*, *priorizando fuentes*, *redactando*— la espera se lee
+como trabajo.
+
+Dos detalles que costaron encontrarse:
+
+- **Las fuentes se emiten antes que el texto.** Ya se conocen tras recuperar, así que el
+  usuario ve de dónde saldrá la respuesta mientras el modelo todavía la escribe.
+- **`X-Accel-Buffering: no` en la respuesta.** Sin esa cabecera, cualquier proxy intermedio
+  acumula el flujo y lo entrega de golpe: el streaming funciona en local y desaparece en
+  cuanto se despliega detrás de un nginx.
+
+Un proveedor que no soporte streaming sigue funcionando: `LLMProvider.stream()` cae por
+defecto a producir la respuesta completa y emitirla de una vez, así que nadie aguas arriba
+necesita casos especiales.
+
+### 9.10 IDs de chunk deterministas
 
 El ID se deriva de `url + índice + hash del texto`. Reindexar el mismo contenido **actualiza**
 el punto en vez de duplicarlo, así que la ingesta es idempotente y se puede repetir sin
@@ -837,8 +896,10 @@ Por orden de valor por esfuerzo:
    `content_hash` que ya se guarda, reindexar solo lo que cambió es inmediato; falta el
    planificador (cron o Celery beat) y detección de páginas eliminadas.
 
-4. **Streaming de la respuesta (SSE).** La latencia percibida bajaría mucho: el usuario
-   empieza a leer mientras el modelo sigue escribiendo.
+4. **Reducir el tiempo hasta la primera palabra.** El streaming ya está
+   ([§9.10](#99-el-streaming-reutiliza-la-cadena-no-la-duplica)), pero antes del primer
+   token pasan ~3,5 s de recuperación y reranking. Solaparlos, o rerankear solo los primeros
+   candidatos, bajaría esa espera.
 
 5. **Resumen progresivo del historial** para conversaciones largas, combinado con la ventana
    deslizante actual: resumen de lo antiguo + últimos N mensajes literales.
@@ -873,7 +934,7 @@ No necesitan Docker: la imagen de la aplicación se construye solo con las depen
 ejecución (`pip install .`), sin las de desarrollo, para no cargar la imagen de producción con
 pytest y sus transitivas.
 
-**83 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
+**99 tests, sin dependencias externas** — sin Docker, sin Qdrant, sin OpenAI, sin PostgreSQL.
 Se inyectan dobles de embeddings, base vectorial, LLM y repositorio. Que esto sea posible es
 la comprobación práctica de que las abstracciones descritas en [§5](#5-patrones-de-diseño)
 sirven para algo.
@@ -951,9 +1012,9 @@ PostgreSQL y se comprueba que el sistema **explica el problema y se recupera sol
 Destapó que una base caída devolvía 400 y 500 opacos → corregido a 503 con mensaje limpio.
 Arranque en frío: 22 s hasta `ok`, 5,8 s la primera consulta.
 
-**UI** — Lighthouse: *Best Practices* 100, *Accessibility* 94, cero errores de consola. Los
-fallos restantes son marcado generado por Streamlit y métricas de indexación pública
-(`meta-description`, `robots.txt`) que no aplican a una herramienta interna.
+**UI** — Lighthouse sobre la interfaz Next.js: **100 en accesibilidad, buenas prácticas, SEO
+y *agentic browsing*, con cero auditorías fallidas**. La versión anterior en Streamlit sacaba
+94 / 100 / 82 / 13 con 6 fallos, la mayoría marcado que generaba el propio framework.
 
 Resultado del E2E funcional sobre la ejecución de referencia (116 páginas rastreadas,
 113 documentos indexados, 801 fragmentos):
