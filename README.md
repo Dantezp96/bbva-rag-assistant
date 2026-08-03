@@ -623,37 +623,96 @@ contra el sitio real:
 | **Google Chrome estable, headless** | **200 OK** ← el que se usa |
 | Google Chrome estable, con ventana | 200 OK |
 
-La conclusión es contraintuitiva y determina la implementación: **el bloqueo no depende de los
-parches de JavaScript sino del binario**. El Chromium que empaqueta Playwright tiene una huella
-distinguible (códecs, `userAgentData`, fingerprint TLS/HTTP2). Google Chrome estable en modo
-headless nuevo pasa el filtro **sin necesidad de Xvfb ni ventana gráfica**, lo que hace la
-solución viable dentro de Docker.
+La conclusión es contraintuitiva y determina la implementación: **lo que discrimina es el
+ejecutable que se lanza, no el JavaScript que se inyecta**. Tres filas de parches y modos sobre
+el Chromium empaquetado siguen dando 403; cambiar el binario a Google Chrome estable da 200, y
+en modo headless nuevo, **sin necesidad de Xvfb ni ventana gráfica**, lo que hace la solución
+viable dentro de Docker.
 
 Por eso `docker/Dockerfile.app` instala Google Chrome desde el repositorio oficial y el fetcher
 lanza con `channel="chrome"`, degradando al Chromium empaquetado con un aviso explícito si
 Chrome no estuviera disponible.
 
-**Sobre `robots.txt`:** el sitio también lo sirve con 403, así que no hay reglas que parsear.
-Ante esa ausencia el crawler **no** asume barra libre: mantiene el retardo entre peticiones,
-el filtro de dominio, el tope de páginas y la lista de exclusión, y deja constancia en el log.
-Solo se rastrea contenido público e institucional; nada tras autenticación.
+**Lo que esta tabla mide y lo que no.** Mide resultados, no mecanismos. Sobre el mecanismo solo
+cabe una hipótesis: desde Playwright 1.49 el modo headless sin `channel` no lanza el Chromium
+empaquetado sino `chromium-headless-shell`, un ejecutable aparte y recortado, lo que explicaría
+que el mismo Chromium con ventana sí pase. Se enuncia como hipótesis porque no se midió.
+
+Conviene además retirar una atribución que aparecía en versiones anteriores de este documento:
+la huella TLS **no** puede ser lo que separa las filas 2 y 4, porque comparten stack TLS y dan
+resultados distintos. Sostener una causa que los propios datos refutan sería un error.
+
+#### Comprobación posterior a la entrega — el escalón que faltaba
+
+Ya cerrada la entrega se comprobó una familia que la tabla no recorre: la **suplantación de
+huella TLS/HTTP2 sin navegador**. El resultado obliga a matizar el alcance de la conclusión:
+
+| Cliente | `/robots.txt` | home | `prestamos/vivienda.html` |
+|---|---|---|---|
+| `httpx` con cabeceras de Chrome | 403 | 403 | 403 |
+| **`curl_cffi`, `impersonate="chrome"`** | **200** | **200** (330 KB) | **200** (363 KB) |
+
+Es decir: el bloqueo se resolvía también una capa por debajo del navegador, con una dependencia
+y unas diez líneas. El diagnóstico original —discrimina el cliente, no el JavaScript— se
+sostiene; el remedio elegido era válido pero **no era el mínimo**. En una siguiente versión el
+pipeline sería `curl_cffi` + sitemap, con el navegador reservado a las páginas que dependan de
+XHR. Esto **no** forma parte de lo entregado y se documenta aquí por honestidad, no como logro.
+
+**Sobre `robots.txt`.** Con cualquier cliente HTTP plano el sitio lo sirve con 403, así que
+durante el desarrollo no hubo reglas que parsear. Ante esa ausencia el crawler **no** asume
+barra libre: mantiene el retardo entre peticiones, el filtro de dominio, el tope de páginas y
+la lista de exclusión, y deja constancia en el log. Solo se rastrea contenido público e
+institucional; nada tras autenticación.
+
+La comprobación anterior permite ahora leerlo. Dice `Allow: /` con dos reglas de exclusión
+(`*.content.html` y `/personas/cards`) y declara tres sitemaps. **Se cruzaron las 116 URLs del
+corpus contra esas reglas: ninguna cae dentro de ellas.** El crawl fue conforme, aunque conviene
+decir que lo fue por prudencia y no por haber podido leer el fichero. Los sitemaps declarados
+habrían dado además un descubrimiento completo y determinista, frente al recorrido por enlaces
+que se usó: de las 116 URLs, **114 cuelgan de `/personas`** —solo la home y `/empresas.html`
+quedan fuera—, lo que es un sesgo de cobertura real y medible.
 
 ### 9.2 Un solo extractor de texto no basta
 
 Medido sobre páginas de producto reales de BBVA:
 
-| Página | trafilatura | extractor por DOM |
-|---|---|---|
-| `prestamos/vivienda.html` | 371 chars | **6.876 chars** |
-| `prestamos/online.html` | 398 chars | **10.430 chars** |
-| `personas/aviso-legal.html` | **2.190 chars** | 1.271 chars |
+Medido sobre páginas de producto reales de BBVA. Las cifras salen de reejecutar ambos
+extractores sobre los 116 HTML de `data/raw/`, así que son reproducibles desde el repositorio:
+
+| Página | trafilatura | extractor por DOM | factor |
+|---|---|---|---|
+| `prestamos/vivienda.html` | 371 chars | **4.662 chars** | 12,6× |
+| `prestamos/online.html` | 398 chars | **4.837 chars** | 12,2× |
+| `personas/licitacion-seguros.html` | 324 chars | **11.314 chars** | 34,9× |
+| `personas/aviso-legal.html` | **2.190 chars** | 1.271 chars | invertido |
 
 Las páginas de producto son maquetación por componentes, no prosa: el algoritmo de densidad de
 texto de trafilatura las descarta y se pierde justo lo que el usuario pregunta (plazos,
-porcentajes de financiación, requisitos). En las páginas editoriales ocurre lo contrario.
+porcentajes de financiación, requisitos). En las páginas editoriales ocurre lo contrario, y por
+eso la última fila importa tanto como las tres primeras.
+
+No es que trafilatura esté mal configurada: se la llama con `favor_recall=True`,
+`include_tables=True` y `no_fallback=False`, es decir, forzando recall y con readability y
+jusText activos como respaldo interno. Falla aun así.
 
 Por eso `cleaner.py` **ejecuta ambos extractores y elige el más informativo por página**. Es
-barato y evita perder contenido por casarse con una librería.
+barato y evita perder contenido por casarse con una librería. Sobre el corpus entregado el
+árbitro elige el extractor DOM en **54 de 116** páginas y trafilatura en las otras 62: ninguno
+de los dos habría bastado por su cuenta.
+
+> **Errata corregida.** Versiones anteriores de esta tabla publicaban 6.876 y 10.430 para las
+> dos primeras filas. Esas cifras se midieron antes de que `_extract_with_soup` empezara a
+> saltarse los `<li>` que contienen otra lista (`cleaner.py`), un arreglo que eliminó texto
+> contado dos veces. Nunca se re-midieron. Desactivando ese salto, los números antiguos
+> reproducen exactos, lo que confirma el origen. La conclusión no cambia —el factor sigue
+> siendo de doble dígito— pero la cifra publicada debía ser la que sale hoy del código.
+
+#### Límite conocido del árbitro
+
+El criterio es **longitud en caracteres**, con un margen de 1,2× a favor de trafilatura en caso
+de empate. La longitud es un proxy de recall, no de informatividad: premia volumen, no
+cobertura. Un criterio mejor sería la cobertura de entidades ancla —porcentajes, plazos,
+montos— decidida *después* de limpiar y no antes. Está identificado y no implementado.
 
 ### 9.3 Guardar el HTML crudo no es redundante
 
