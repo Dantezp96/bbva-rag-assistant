@@ -44,12 +44,37 @@ from rag_assistant.core.models import Role
 logger = get_logger(__name__)
 
 #: Precio por 1M de tokens (USD): (entrada, salida). Solo para estimar coste.
+#:
+#: Tarifa estándar de contexto corto, consultada en developers.openai.com el
+#: 2026-08-03. No incluye el descuento de entrada cacheada ni el de la Batch
+#: API: la estimación es deliberadamente conservadora, porque un coste que se
+#: queda corto es más dañino que uno que se pasa.
+#:
+#: Un modelo que no esté aquí NO hereda la tarifa de su familia: vale cero y
+#: aparece en `untariffed_models`. Ver `_pricing_for`.
 _PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
+    # Familia 4o
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
+    # Familia 4.1
+    "gpt-4.1-nano": (0.10, 0.40),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
+    # Familia 5
+    "gpt-5-nano": (0.05, 0.40),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5": (1.25, 10.00),
+    # Familia 5.4 — más nueva no significa más barata: gpt-5.4-nano cuesta
+    # cuatro veces la entrada de gpt-5-nano.
+    "gpt-5.4-nano": (0.20, 1.25),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4": (2.50, 15.00),
 }
+
+
+#: Sufijo de instantánea que la API añade al alias: `-2024-07-18`. Es lo único
+#: que se puede recortar para buscar en la tabla; ver `_pricing_for`.
+_SNAPSHOT_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
 
 def _pricing_for(model: str | None) -> tuple[float, float]:
@@ -58,18 +83,25 @@ def _pricing_for(model: str | None) -> tuple[float, float]:
     La API no devuelve el alias que se le pidió sino la instantánea concreta
     que atendió la petición (`gpt-4o-mini` -> `gpt-4o-mini-2024-07-18`). Una
     búsqueda exacta falla siempre contra la respuesta real y el coste se
-    reporta como 0. Se resuelve por prefijo más largo, que además absorbe
-    futuras instantáneas sin tocar la tabla.
+    reporta como 0.
+
+    Se recorta **solo el sufijo de fecha**, y no cualquier prefijo. La versión
+    anterior buscaba el prefijo más largo de la tabla, lo que parece razonable
+    hasta que aparece una variante nueva de una familia conocida: como
+    `gpt-4.1-nano` empieza por `gpt-4.1`, se le aplicaba la tarifa del modelo
+    grande —2,00 y 8,00 en vez de las suyas— y el coste salía unas veinte veces
+    inflado. Y lo peor no era el error, era que *no se notaba*: al casar con una
+    clave, el modelo no aparecía en `untariffed_models`.
+
+    Un modelo desconocido debe reportarse, no heredar el precio de un pariente.
     """
     if not model:
         return (0.0, 0.0)
     normalized = model.lower().removeprefix("models/")
     if normalized in _PRICING_USD_PER_MTOK:
         return _PRICING_USD_PER_MTOK[normalized]
-    matches = [key for key in _PRICING_USD_PER_MTOK if normalized.startswith(key)]
-    if not matches:
-        return (0.0, 0.0)
-    return _PRICING_USD_PER_MTOK[max(matches, key=len)]
+    sin_fecha = _SNAPSHOT_SUFFIX.sub("", normalized)
+    return _PRICING_USD_PER_MTOK.get(sin_fecha, (0.0, 0.0))
 
 #: Palabras vacías del español: sin filtrarlas, el "top de temas" son artículos.
 _STOPWORDS = {

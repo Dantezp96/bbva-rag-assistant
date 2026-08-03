@@ -189,6 +189,32 @@ def test_el_coste_reconoce_los_ids_con_fecha_que_devuelve_la_api(sql_repo):
     assert report.untariffed_models == []
 
 
+def test_una_variante_desconocida_no_hereda_la_tarifa_de_su_familia():
+    """Regresión: `gpt-4.1-nano` se estaba cobrando a precio de `gpt-4.1`.
+
+    La búsqueda por prefijo más largo casaba `gpt-4.1-nano-2025-04-14` con la
+    clave `gpt-4.1`, aplicándole 2,00 y 8,00 en vez de su tarifa real: el coste
+    salía unas veinte veces inflado. Y el fallo era silencioso, porque al casar
+    con una clave el modelo tampoco aparecía en `untariffed_models`.
+
+    Solo se recorta el sufijo de fecha; una variante desconocida vale 0 y se
+    reporta.
+    """
+    from rag_assistant.analytics.service import _PRICING_USD_PER_MTOK, _pricing_for
+
+    familia = _PRICING_USD_PER_MTOK["gpt-4.1"]
+    assert _pricing_for("gpt-4.1-nano-2025-04-14") != familia
+    assert _pricing_for("gpt-4.1-nano") != familia
+
+    # Una variante que de verdad no está en la tabla se reporta, no se inventa.
+    assert _pricing_for("gpt-4.1-turbo-inventado") == (0.0, 0.0)
+    assert _pricing_for("gpt-4o-imaginario-2030-01-01") == (0.0, 0.0)
+
+    # Y el recorte del sufijo de fecha sigue funcionando para todos los alias.
+    for alias in _PRICING_USD_PER_MTOK:
+        assert _pricing_for(f"{alias}-2024-07-18") == _PRICING_USD_PER_MTOK[alias]
+
+
 def test_el_informe_detecta_preguntas_sin_responder(sql_repo):
     """La métrica más accionable: qué contenido falta por indexar."""
     sql_repo.ensure_conversation("c1")

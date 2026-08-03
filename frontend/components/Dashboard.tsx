@@ -181,11 +181,6 @@ export function Dashboard() {
             ]}
           />
         </div>
-        {datos.untariffed_models?.length > 0 && (
-          <p className="mono text-[11px]" style={{ color: "var(--warn)" }}>
-            Sin tarifa conocida, no contados en el coste: {datos.untariffed_models.join(", ")}
-          </p>
-        )}
       </Seccion>
 
       <Seccion n="04" title="Contenido">
