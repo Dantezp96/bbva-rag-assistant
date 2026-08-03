@@ -11,6 +11,7 @@ convenga sin tocar el motor RAG.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 
@@ -53,6 +54,27 @@ class LLMProvider(ABC):
         (p. ej. reescribir una consulta) no herede el presupuesto pensado para
         redactar la respuesta final.
         """
+
+    def stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        """Genera la respuesta por fragmentos, según llegan del proveedor.
+
+        Por defecto no hay streaming real: se produce la respuesta completa y se
+        entrega de una vez. Así, un proveedor que no lo soporte sigue siendo
+        utilizable por la interfaz de streaming sin casos especiales aguas
+        arriba —simplemente el usuario ve el texto de golpe—.
+        """
+        yield self.complete(messages, max_tokens=max_tokens, temperature=temperature).content
+
+    @property
+    def supports_streaming(self) -> bool:
+        """`True` si `stream` emite fragmentos reales y no la respuesta entera."""
+        return False
 
     @abstractmethod
     def health(self) -> bool:

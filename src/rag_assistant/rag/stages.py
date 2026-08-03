@@ -97,6 +97,16 @@ class Stage(ABC):
         self._next = stage
         return stage
 
+    @property
+    def next_stage(self) -> Stage | None:
+        """Siguiente eslabón, o `None` si es el último.
+
+        Lo usa el modo streaming para recorrer la cadena paso a paso y poder
+        anunciar qué etapa está en curso, en vez de delegar en `handle` y no
+        poder emitir nada hasta el final.
+        """
+        return self._next
+
     def handle(self, context: RAGContext) -> RAGContext:
         context = self.process(context)
         if context.stop or self._next is None:

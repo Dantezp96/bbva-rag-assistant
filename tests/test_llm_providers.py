@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from rag_assistant.config import Settings
@@ -38,6 +39,57 @@ def test_base_url_personalizada_se_respeta():
         Settings(openai_api_key="sk-test", openai_base_url="https://gateway.example.com/v1")
     )
     assert provider.base_url == "https://gateway.example.com/v1"
+
+
+def test_se_adapta_al_modelo_que_exige_max_completion_tokens():
+    """Regresión: los modelos GPT-5 rechazan `max_tokens`.
+
+    Con el nombre del parámetro fijo en el código, cambiar LLM_MODEL a un
+    modelo nuevo devolvía un 400 — justo lo contrario de lo que promete tener
+    el LLM tras una interfaz intercambiable.
+    """
+    import openai
+
+    provider = OpenAIProvider(Settings(openai_api_key="sk-test", llm_model="gpt-5.4-nano"))
+    llamadas: list[dict] = []
+
+    class RespuestaFalsa:
+        model = "gpt-5.4-nano"
+        usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+        choices = [
+            type("C", (), {
+                "message": type("M", (), {"content": "hola"})(),
+                "finish_reason": "stop",
+            })()
+        ]
+
+    def create(**kwargs):
+        llamadas.append(kwargs)
+        if "max_tokens" in kwargs:
+            raise openai.BadRequestError(
+                message="Unsupported parameter: 'max_tokens' is not supported with this "
+                        "model. Use 'max_completion_tokens' instead.",
+                response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+                body=None,
+            )
+        return RespuestaFalsa()
+
+    provider._client = type(
+        "Cliente", (), {"chat": type("Chat", (), {"completions": type(
+            "Comp", (), {"create": staticmethod(create)})()})()}
+    )()
+
+    r = provider.complete([{"role": "user", "content": "hola"}])
+    assert r.content == "hola"
+    # Primer intento con max_tokens, segundo con el nombre nuevo.
+    assert "max_tokens" in llamadas[0]
+    assert "max_completion_tokens" in llamadas[1]
+
+    # El nombre correcto se recuerda: la siguiente llamada no repite el fallo.
+    llamadas.clear()
+    provider.complete([{"role": "user", "content": "otra"}])
+    assert len(llamadas) == 1
+    assert "max_completion_tokens" in llamadas[0]
 
 
 def test_la_fabrica_devuelve_el_proveedor_configurado():

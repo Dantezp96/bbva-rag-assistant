@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from rag_assistant.analytics import AnalyticsService
 from rag_assistant.api.dependencies import get_analytics, get_engine
@@ -15,8 +18,10 @@ from rag_assistant.api.schemas import (
 )
 from rag_assistant.config import get_settings
 from rag_assistant.core.exceptions import ConversationNotFoundError, RAGAssistantError
+from rag_assistant.core.logging import get_logger
 from rag_assistant.rag import RAGEngine
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
@@ -63,6 +68,49 @@ def chat(request: ChatRequest, engine: RAGEngine = Depends(get_engine)) -> ChatR
         prompt_tokens=answer.prompt_tokens,
         completion_tokens=answer.completion_tokens,
         model=answer.model,
+    )
+
+
+@router.post("/stream", summary="Enviar un mensaje y recibir la respuesta por partes")
+def chat_stream(request: ChatRequest, engine: RAGEngine = Depends(get_engine)):
+    """Igual que `POST /chat`, pero emitiendo eventos SSE conforme se producen.
+
+    Tipos de evento, en orden:
+      `start`    id de la conversación (útil cuando el cliente no lo fijó)
+      `sources`  las fuentes, en cuanto se recuperan y antes de generar
+      `token`    fragmentos de texto según llegan del modelo
+      `error`    fallo controlado; el turno queda igualmente registrado
+      `done`     telemetría completa, id del mensaje y sugerencias
+
+    Las fuentes se emiten antes que el texto a propósito: el usuario ve de
+    dónde saldrá la respuesta mientras el modelo todavía la escribe.
+    """
+
+    def eventos():
+        try:
+            for tipo, datos in engine.ask_stream(
+                request.message,
+                conversation_id=request.conversation_id,
+                user_id=request.user_id,
+                channel="web",
+                history_window=request.history_window,
+            ):
+                yield f"event: {tipo}\ndata: {json.dumps(datos, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - el flujo ya está abierto
+            logger.exception("api.stream_failed", error=str(exc))
+            fallo = {"message": "Se interrumpió la generación de la respuesta."}
+            yield f"event: error\ndata: {json.dumps(fallo, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        eventos(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Evita que un proxy intermedio acumule la respuesta y anule el
+            # streaming: sin esto, el usuario vuelve a esperar en silencio.
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 
