@@ -156,6 +156,19 @@ La vista **Chat** mantiene la conversación con memoria. Cada respuesta muestra:
 En la barra lateral puedes fijar un `conversation_id` para **retomar una conversación
 anterior**, o empezar una nueva.
 
+**Botones de pregunta recomendada.** La conversación vacía ofrece preguntas de arranque, y
+tras cada respuesta aparecen hasta tres preguntas de seguimiento. Pulsar una equivale a
+escribirla. Dos decisiones detrás de esto:
+
+- **Las sugerencias se generan a partir de los fragmentos que ya se recuperaron**, no del
+  conocimiento general del modelo. Una sugerencia es una promesa implícita: el usuario pulsa
+  asumiendo que el sistema sabe la respuesta, y llevarle a un *"no encontré esa información"*
+  es peor que no ofrecer nada. Medido sobre 9 sugerencias reales, **7 resultaron
+  respondibles**; no se proponen sugerencias cuando la respuesta no quedó fundamentada.
+- **Las preguntas de arranque salen del uso real** cuando lo hay: las más repetidas del
+  histórico que el sistema supo responder, vía el módulo de analítica. Solo si no hay señal
+  suficiente se recurre a la lista de `STARTER_QUESTIONS`.
+
 La vista **Analítica** es el panel descrito en [§4](#4-analítica-del-histórico-de-conversaciones).
 
 Preguntas de ejemplo que funcionan bien con el corpus indexado:
@@ -702,6 +715,23 @@ recuperación, ni el reranking, ni la generación se enteraron. Eso es lo que se
 el patrón Chain of Responsibility ([§5.5](#55-chain-of-responsibility)), y es la
 justificación práctica de haberlo elegido.
 
+**La corrección trajo su propio fallo, y conviene contarlo.** Al probar la reescritura en
+vivo apareció esto:
+
+```
+Historial › ¿Qué plazos tiene el crédito de vehículo?
+Pregunta  › ¿Qué tipos de cuenta de ahorro hay?
+Reescrita › ¿Cuáles son los plazos del crédito de vehículo?   ← le cambió la pregunta
+```
+
+Ante una pregunta nueva y autocontenida, el modelo devolvía la anterior. Eso es peor que no
+reescribir, porque corrompe justamente las preguntas normales, que son la mayoría. La
+salvaguarda es una invariante verificable en vez de más instrucciones en el prompt: **una
+reescritura legítima añade contexto, luego conserva al menos una palabra temática del
+original**. Si el usuario no aportó ninguna (*"¿y eso?"*), no hay nada que preservar y se
+acepta —que es justo cuando reescribir hace más falta—. Está cubierto por tests de
+regresión con el caso literal que falló.
+
 ### 9.9 IDs de chunk deterministas
 
 El ID se deriva de `url + índice + hash del texto`. Reindexar el mismo contenido **actualiza**
@@ -768,7 +798,23 @@ Enumeradas con honestidad, como pide el enunciado.
     pregunta es autocontenida (con una heurística o un modelo diminuto) y reescribir solo
     cuando haga falta.
 
-12. **El rendimiento bajo concurrencia sigue limitado por CPU.** Acotar los hilos de ONNX
+12. **Las preguntas sugeridas son muy probablemente respondibles, no siempre.** Se generan
+    a partir del contexto recuperado, lo que eleva mucho el acierto, pero medido sobre 9
+    sugerencias reales **2 no obtuvieron respuesta fundamentada al pulsarlas**: el tema
+    aparecía en el contexto de la pregunta anterior, pero la búsqueda de esa pregunta
+    concreta no lo recuperaba con fuerza suficiente. Se comprobó también enviándolas dentro
+    del mismo hilo, por si el historial ayudaba: **no cambia el ratio**. La vía real de
+    mejora es la búsqueda híbrida (mejora 2), no retocar el prompt de sugerencias.
+
+13. **La reescritura de consulta necesita una salvaguarda, y por algo.** En pruebas en vivo
+    el modelo llegó a devolver la pregunta *anterior* ante una pregunta nueva y
+    autocontenida, cambiándole el tema al usuario. Se corrige exigiendo que la reescritura
+    conserve al menos una palabra temática del original
+    ([§9.8](#98-la-búsqueda-necesitaba-reescribir-la-consulta-no-solo-recordarla)), pero es
+    una heurística léxica: un cambio de tema expresado con las mismas palabras podría
+    colarse.
+
+14. **El rendimiento bajo concurrencia sigue limitado por CPU.** Acotar los hilos de ONNX
     ([§9.7](#97-usar-todos-los-núcleos-era-22-más-lento-que-usar-la-mitad)) mejoró mucho las
     cosas, pero el reranking sigue siendo inferencia en CPU y es la etapa dominante. Para
     concurrencia alta de verdad haría falta GPU, un reranker más pequeño, o mover el

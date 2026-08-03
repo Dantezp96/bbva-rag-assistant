@@ -47,6 +47,7 @@ from rag_assistant.rag.stages import (
     RerankStage,
     RetrievalStage,
     Stage,
+    SuggestionStage,
     build_chain,
 )
 
@@ -112,6 +113,12 @@ class RAGEngine:
             )
         )
         stages.append(GenerationStage(self._llm))
+        # Las sugerencias van al final: necesitan la respuesta ya generada para
+        # no repetir lo que se acaba de contar.
+        if self._settings.suggestions_enabled and self._settings.suggestions_count:
+            stages.append(
+                SuggestionStage(self._llm, count=self._settings.suggestions_count)
+            )
         return build_chain(stages)
 
     # ----------------------------------------------------------- público ---
@@ -200,6 +207,8 @@ class RAGEngine:
             search_query=context.search_query or question,
             rewritten=context.rewritten,
             rewrite_ms=context.rewrite_ms,
+            suggestions=context.suggestions,
+            suggestions_ms=context.suggestions_ms,
         )
 
         # El ID del mensaje permite que la UI envíe feedback sobre esta respuesta.

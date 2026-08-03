@@ -130,6 +130,22 @@ class Settings(BaseSettings):
     reranker_top_n: int = Field(default=5, gt=0)
     context_max_chars: int = Field(default=8000, gt=0)
 
+    # -------------------------------------------------------- sugerencias ---
+    #: Preguntas de seguimiento propuestas tras cada respuesta. Se generan
+    #: ancladas en el contexto recuperado para que siempre sean respondibles.
+    suggestions_enabled: bool = True
+    suggestions_count: int = Field(default=3, ge=0, le=6)
+    #: Preguntas de arranque cuando la conversación está vacía. Se usan como
+    #: respaldo: si ya hay histórico, se muestran las más consultadas de verdad.
+    starter_questions: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "¿Qué tipos de cuenta de ahorro ofrece BBVA Colombia?",
+            "¿Hasta qué porcentaje financia BBVA un crédito de vivienda?",
+            "¿Qué plazos tiene el crédito de vehículo?",
+            "¿Qué es un CDT y qué modalidades hay?",
+        ]
+    )
+
     # ------------------------------------------------------------ memoria ---
     history_window_size: int = Field(default=6, ge=0)
     history_max_chars: int = Field(default=4000, gt=0)
@@ -149,6 +165,7 @@ class Settings(BaseSettings):
         "scraper_allowed_domains",
         "scraper_url_deny_patterns",
         "api_cors_origins",
+        "starter_questions",
         mode="before",
     )
     @classmethod

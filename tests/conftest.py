@@ -28,7 +28,13 @@ def settings(tmp_path) -> Settings:
         history_window_size=4,
         retrieval_top_k=5,
         reranker_top_n=3,
+        # Las etapas opcionales se apagan por defecto y cada test enciende la
+        # que va a ejercitar. Si no, añadir una etapa nueva a la cadena rompe
+        # tests ajenos por efecto colateral (conteo de llamadas, tokens), que
+        # es justo lo que pasó al introducir las sugerencias.
         reranker_enabled=False,
+        query_rewrite_enabled=False,
+        suggestions_enabled=False,
         chunk_size=200,
         chunk_overlap=40,
         chunk_min_size=0,

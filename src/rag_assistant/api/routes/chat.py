@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from rag_assistant.api.dependencies import get_engine
+from rag_assistant.analytics import AnalyticsService
+from rag_assistant.api.dependencies import get_analytics, get_engine
 from rag_assistant.api.schemas import (
     ChatRequest,
     ChatResponse,
@@ -12,6 +13,7 @@ from rag_assistant.api.schemas import (
     FeedbackRequest,
     SourceOut,
 )
+from rag_assistant.config import get_settings
 from rag_assistant.core.exceptions import ConversationNotFoundError, RAGAssistantError
 from rag_assistant.rag import RAGEngine
 
@@ -51,8 +53,10 @@ def chat(request: ChatRequest, engine: RAGEngine = Depends(get_engine)) -> ChatR
         history_used=answer.history_used,
         search_query=answer.search_query,
         rewritten=answer.rewritten,
+        suggestions=answer.suggestions,
         latency_ms=answer.latency_ms,
         rewrite_ms=answer.rewrite_ms,
+        suggestions_ms=answer.suggestions_ms,
         retrieval_ms=answer.retrieval_ms,
         rerank_ms=answer.rerank_ms,
         llm_ms=answer.llm_ms,
@@ -60,6 +64,21 @@ def chat(request: ChatRequest, engine: RAGEngine = Depends(get_engine)) -> ChatR
         completion_tokens=answer.completion_tokens,
         model=answer.model,
     )
+
+
+@router.get("/starters", summary="Preguntas sugeridas para empezar")
+def starters(service: AnalyticsService = Depends(get_analytics)) -> dict:
+    """Preguntas con las que arrancar una conversación nueva.
+
+    Si el histórico ya tiene señal, se ofrecen las preguntas reales más
+    repetidas que el sistema supo responder; si no, la lista configurada en
+    `STARTER_QUESTIONS`. En ambos casos son preguntas que el corpus cubre.
+    """
+    settings = get_settings()
+    populares = service.popular_questions(limit=settings.suggestions_count + 1)
+    if populares:
+        return {"questions": populares, "source": "historico"}
+    return {"questions": settings.starter_questions, "source": "configuracion"}
 
 
 @router.get(

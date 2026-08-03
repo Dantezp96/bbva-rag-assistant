@@ -57,8 +57,14 @@ class ChatResponse(BaseModel):
         "con el historial (seguimientos sin sujeto).",
     )
     rewritten: bool = False
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Preguntas de seguimiento propuestas. Se generan a partir de los "
+        "fragmentos recuperados, así que el sistema puede responderlas.",
+    )
     latency_ms: int = 0
     rewrite_ms: int = 0
+    suggestions_ms: int = 0
     retrieval_ms: int = 0
     rerank_ms: int = 0
     llm_ms: int = 0

@@ -231,6 +231,41 @@ def test_si_la_reescritura_falla_se_sigue_con_la_pregunta_original(
     assert r.answer  # la respuesta se produjo igualmente
 
 
+def test_no_se_permite_que_la_reescritura_cambie_el_tema(settings, fake_embedder, fake_llm):
+    """Regresión de un fallo observado en vivo.
+
+    Con historial sobre créditos de vehículo, el modelo devolvía la pregunta
+    ANTERIOR ante una pregunta nueva y autocontenida sobre cuentas de ahorro.
+    Eso no es reescribir: es cambiarle la pregunta al usuario, y corrompe justo
+    las preguntas normales, que son la mayoría.
+    """
+    fake_llm._content = "¿Cuáles son los plazos del crédito de vehículo?"
+    engine = _engine_con_reescritura(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), fake_llm
+    )
+    engine.ask("¿Qué plazos tiene el crédito de vehículo?", conversation_id="c1")
+    r = engine.ask("¿Qué tipos de cuenta de ahorro hay?", conversation_id="c1")
+
+    assert r.rewritten is False
+    assert r.search_query == "¿Qué tipos de cuenta de ahorro hay?"
+
+
+def test_la_reescritura_se_acepta_si_conserva_el_tema():
+    """El complemento del test anterior: añadir el sujeto SÍ es válido."""
+    from rag_assistant.rag.stages import QueryRewriteStage
+
+    valida = QueryRewriteStage._es_reescritura_valida
+    assert valida("¿Cuál es el plazo máximo de ese producto?",
+                  "¿Cuál es el plazo máximo del crédito de vivienda?")
+    assert valida("¿Y esa cobra cuota de manejo?",
+                  "¿La Cuenta Digital BBVA cobra cuota de manejo?")
+    # Sin palabras temáticas propias no hay nada que preservar: se acepta.
+    assert valida("¿Y eso?", "¿Cuál es la tasa del crédito de vivienda?")
+    # Cambio de tema: se rechaza.
+    assert not valida("¿Qué tipos de cuenta de ahorro hay?",
+                      "¿Cuáles son los plazos del crédito de vehículo?")
+
+
 def test_se_descarta_una_reescritura_degenerada(settings, fake_embedder, fake_llm):
     """Si el modelo devuelve basura o un discurso, gana la pregunta original."""
     fake_llm._content = "x"  # demasiado corta para ser una consulta
@@ -240,6 +275,95 @@ def test_se_descarta_una_reescritura_degenerada(settings, fake_embedder, fake_ll
     engine.ask("pregunta uno", conversation_id="c1")
     r = engine.ask("¿y el plazo máximo?", conversation_id="c1")
     assert r.search_query == "¿y el plazo máximo?"
+
+
+# ------------------------------------------ sugerencias de seguimiento ------
+def _engine_con_sugerencias(settings, embedder, store, llm, count=3):
+    object.__setattr__(settings, "suggestions_enabled", True)
+    object.__setattr__(settings, "suggestions_count", count)
+    return _engine(settings, embedder, store, llm)
+
+
+def test_las_sugerencias_se_limpian_y_deduplican():
+    """El modelo numera y añade preámbulo pese a prohibírselo: hay que sanear."""
+    from rag_assistant.rag.stages import _limpiar_sugerencias
+
+    bruto = (
+        "Aquí tienes algunas preguntas:\n"
+        "1. ¿Qué requisitos piden?\n"
+        "- ¿Cuál es la tasa de interés?\n"
+        '"¿Qué requisitos piden?"\n'
+        "• ¿Se puede pagar anticipadamente?\n"
+        "esto no es una pregunta\n"
+        "¿ok?\n"
+    )
+    salida = _limpiar_sugerencias(bruto, limite=5, pregunta_actual="otra cosa")
+    assert salida == [
+        "¿Qué requisitos piden?",
+        "¿Cuál es la tasa de interés?",
+        "¿Se puede pagar anticipadamente?",
+    ]
+
+
+def test_no_se_repite_la_pregunta_que_el_usuario_acaba_de_hacer():
+    from rag_assistant.rag.stages import _limpiar_sugerencias
+
+    salida = _limpiar_sugerencias(
+        "¿Qué plazos tiene?\n¿Cuál es la tasa?",
+        limite=3,
+        pregunta_actual="¿Qué plazos tiene?",
+    )
+    assert salida == ["¿Cuál es la tasa?"]
+
+
+def test_se_proponen_sugerencias_tras_una_respuesta_fundamentada(
+    settings, fake_embedder, fake_llm
+):
+    fake_llm._content = "¿Qué requisitos piden?\n¿Cuál es la tasa de interés?"
+    engine = _engine_con_sugerencias(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(3)), fake_llm
+    )
+    r = engine.ask("¿Qué créditos de vivienda ofrecen?")
+    assert r.suggestions == ["¿Qué requisitos piden?", "¿Cuál es la tasa de interés?"]
+
+
+def test_sin_contexto_no_se_proponen_sugerencias(settings, fake_embedder, fake_llm):
+    """Sugerir seguimiento a un 'no encontré información' sería inventar."""
+    engine = _engine_con_sugerencias(
+        settings, fake_embedder, FakeVectorStore(results=[]), fake_llm
+    )
+    r = engine.ask("algo que no está en el corpus")
+    assert r.suggestions == []
+    assert fake_llm.calls == []  # ni siquiera se llamó al LLM
+
+
+def test_un_fallo_generando_sugerencias_no_afecta_a_la_respuesta(
+    settings, fake_embedder, fake_llm
+):
+    class LLMQueFallaAlSugerir(type(fake_llm)):
+        def complete(self, messages, *, max_tokens=None, temperature=None):
+            if max_tokens == 120:  # la llamada de sugerencias
+                raise RuntimeError("proveedor caído")
+            return super().complete(messages)
+
+    engine = _engine_con_sugerencias(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), LLMQueFallaAlSugerir()
+    )
+    r = engine.ask("¿Qué cuentas hay?")
+    assert r.suggestions == []
+    assert r.answer  # la respuesta se entregó igualmente
+    assert r.grounded
+
+
+def test_se_respeta_el_numero_configurado_de_sugerencias(settings, fake_embedder, fake_llm):
+    fake_llm._content = (
+        "¿Qué requisitos piden?\n¿Cuál es la tasa?\n¿Qué plazos hay?\n"
+        "¿Se puede prepagar?\n¿Cobran seguro?"
+    )
+    engine = _engine_con_sugerencias(
+        settings, fake_embedder, FakeVectorStore(results=_chunks(2)), fake_llm, count=2
+    )
+    assert len(engine.ask("¿Qué cuentas hay?").suggestions) == 2
 
 
 def test_pregunta_vacia_no_consume_recursos(settings, fake_embedder, fake_llm):

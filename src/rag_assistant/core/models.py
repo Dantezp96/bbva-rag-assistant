@@ -183,6 +183,9 @@ class RAGAnswer:
     search_query: str = ""
     rewritten: bool = False
     rewrite_ms: int = 0
+    #: Preguntas de seguimiento propuestas, derivadas del contexto recuperado.
+    suggestions: list[str] = field(default_factory=list)
+    suggestions_ms: int = 0
     #: ID del mensaje persistido; lo usa la UI para enviar feedback sobre él.
     message_id: int | None = None
 

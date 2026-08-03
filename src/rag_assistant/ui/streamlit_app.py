@@ -55,6 +55,11 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "rated" not in st.session_state:
     st.session_state.rated = set()
+# Pregunta encolada por un botón de sugerencia. `st.chat_input` no se puede
+# rellenar por código, así que el botón deja aquí la pregunta y relanza el
+# script; el flujo de abajo la trata igual que si se hubiera tecleado.
+if "pending_question" not in st.session_state:
+    st.session_state.pending_question = None
 
 
 # --------------------------------------------------------------- sidebar ----
@@ -137,6 +142,48 @@ def _render_feedback(message_id: int) -> None:
         st.rerun()
 
 
+def _encolar(pregunta: str) -> None:
+    st.session_state.pending_question = pregunta
+    st.rerun()
+
+
+def _render_suggestions(preguntas: list[str], *, clave: str) -> None:
+    """Botones de pregunta sugerida.
+
+    Se muestran en columnas para que no empujen la conversación hacia abajo.
+    Al pulsarlos encolan la pregunta y relanzan el script, de modo que siguen
+    exactamente el mismo camino que una pregunta tecleada.
+    """
+    if not preguntas:
+        return
+    st.caption("Continuar con:")
+    for columna, pregunta in zip(st.columns(len(preguntas)), preguntas, strict=True):
+        if columna.button(pregunta, key=f"sug-{clave}-{pregunta[:40]}", use_container_width=True):
+            _encolar(pregunta)
+
+
+def _render_starters() -> None:
+    """Botones de arranque cuando la conversación está vacía."""
+    try:
+        datos = api_get("/chat/starters")
+    except Exception:  # noqa: BLE001 - la pantalla vacía no debe romperse
+        return
+    preguntas = datos.get("questions", [])
+    if not preguntas:
+        return
+
+    origen = (
+        "Las más consultadas por los usuarios"
+        if datos.get("source") == "historico"
+        else "Para empezar"
+    )
+    st.markdown(f"**{origen}**")
+    for i, pregunta in enumerate(preguntas):
+        if st.button(pregunta, key=f"start-{i}", use_container_width=True):
+            _encolar(pregunta)
+    st.caption("O escribe tu propia pregunta abajo.")
+
+
 def render_chat() -> None:
     st.header("Conversación")
     st.caption(
@@ -145,15 +192,10 @@ def render_chat() -> None:
     )
 
     if not st.session_state.messages:
-        st.info(
-            "**Ejemplos de preguntas**\n\n"
-            "- ¿Qué tipos de cuenta de ahorro ofrece BBVA Colombia?\n"
-            "- ¿Hasta qué porcentaje financia BBVA un crédito de vivienda?\n"
-            "- ¿Qué plazos tiene el crédito de vehículo?\n"
-            "- ¿Qué es un CDT y qué modalidades hay?"
-        )
+        _render_starters()
 
-    for entry in st.session_state.messages:
+    ultimo = len(st.session_state.messages) - 1
+    for indice, entry in enumerate(st.session_state.messages):
         with st.chat_message(entry["role"]):
             st.markdown(entry["content"])
             _render_sources(entry.get("sources", []))
@@ -161,8 +203,14 @@ def render_chat() -> None:
                 st.caption(entry["meta"])
             if entry["role"] == "assistant" and entry.get("message_id"):
                 _render_feedback(entry["message_id"])
+        # Solo el último turno ofrece seguimiento: sugerir sobre una respuesta
+        # antigua reabriría un hilo que la conversación ya dejó atrás.
+        if indice == ultimo and entry["role"] == "assistant":
+            _render_suggestions(entry.get("suggestions", []), clave=str(entry.get("message_id")))
 
-    prompt = st.chat_input("Escribe tu pregunta…")
+    # Una pregunta encolada por un botón entra por el mismo sitio que una tecleada.
+    prompt = st.session_state.pending_question or st.chat_input("Escribe tu pregunta…")
+    st.session_state.pending_question = None
     if not prompt:
         return
 
@@ -180,6 +228,25 @@ def render_chat() -> None:
             st.error(f"Error al consultar la API: {exc}")
             return
 
+    etapas = [
+        f"recuperación {data['retrieval_ms']}",
+        f"rerank {data['rerank_ms']}",
+        f"LLM {data['llm_ms']}",
+    ]
+    if data.get("rewrite_ms"):
+        etapas.insert(0, f"reescritura {data['rewrite_ms']}")
+    if data.get("suggestions_ms"):
+        etapas.append(f"sugerencias {data['suggestions_ms']}")
+
+    meta = (
+        f"⏱️ {data['latency_ms']} ms ({' · '.join(etapas)}) · "
+        f"🎫 {data['prompt_tokens'] + data['completion_tokens']} tokens · "
+        f"🧠 historial: {data['history_used']} msg · "
+        f"{'✅ fundamentada' if data['grounded'] else '⚠️ sin respaldo en el corpus'}"
+    )
+    if data.get("rewritten"):
+        meta += f"\n\n🔎 Buscado como: *{data['search_query']}*"
+
     st.session_state.conversation_id = data["conversation_id"]
     st.session_state.messages.append(
         {
@@ -187,14 +254,8 @@ def render_chat() -> None:
             "content": data["answer"],
             "sources": data.get("sources", []),
             "message_id": data.get("message_id"),
-            "meta": (
-                f"⏱️ {data['latency_ms']} ms "
-                f"(recuperación {data['retrieval_ms']} · rerank {data['rerank_ms']} · "
-                f"LLM {data['llm_ms']}) · "
-                f"🎫 {data['prompt_tokens'] + data['completion_tokens']} tokens · "
-                f"🧠 historial: {data['history_used']} msg · "
-                f"{'✅ fundamentada' if data['grounded'] else '⚠️ sin respaldo en el corpus'}"
-            ),
+            "suggestions": data.get("suggestions", []),
+            "meta": meta,
         }
     )
     # Se reejecuta para que la respuesta se pinte por el mismo camino que el

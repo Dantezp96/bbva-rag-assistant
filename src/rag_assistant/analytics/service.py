@@ -373,6 +373,45 @@ class AnalyticsService:
         )
         return report
 
+    def popular_questions(self, *, limit: int = 4, min_repeticiones: int = 2) -> list[str]:
+        """Preguntas más repetidas que el sistema SÍ supo responder.
+
+        Alimenta los botones de arranque del chat. Se exige que la respuesta
+        quedara fundamentada: proponer una pregunta que el corpus no cubre
+        llevaría al usuario directo a un "no encontré esa información".
+
+        Devuelve lista vacía si aún no hay señal suficiente; en ese caso la UI
+        recurre a las preguntas configuradas en `STARTER_QUESTIONS`.
+        """
+        try:
+            with session_scope() as session:
+                # Se toman las preguntas cuya respuesta siguiente fue fundamentada.
+                respondidas = session.execute(
+                    select(MessageEntity.conversation_id, MessageEntity.created_at).where(
+                        MessageEntity.role == Role.ASSISTANT.value,
+                        MessageEntity.grounded.is_(True),
+                    )
+                ).all()
+                contador: Counter[str] = Counter()
+                for conversation_id, momento in respondidas:
+                    pregunta = session.execute(
+                        select(MessageEntity.content)
+                        .where(
+                            MessageEntity.conversation_id == conversation_id,
+                            MessageEntity.role == Role.USER.value,
+                            MessageEntity.created_at <= momento,
+                        )
+                        .order_by(MessageEntity.created_at.desc())
+                        .limit(1)
+                    ).scalar()
+                    if pregunta and 12 <= len(pregunta) <= 120:
+                        contador[pregunta.strip()] += 1
+        except SQLAlchemyError as exc:
+            logger.warning("analytics.popular_questions_failed", error=str(exc))
+            return []
+
+        return [q for q, n in contador.most_common(limit) if n >= min_repeticiones]
+
     def conversation_detail(self, conversation_id: str) -> dict[str, Any]:
         """Traza completa de una conversación (para auditar un caso concreto)."""
         from rag_assistant.conversation.repository import SqlConversationRepository

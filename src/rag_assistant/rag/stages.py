@@ -16,7 +16,9 @@ y decide si pasa el testigo al siguiente. Modelarlo como una cadena aporta:
 
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -71,6 +73,9 @@ class RAGContext:
     grounded: bool = True
     stop: bool = False  # cortocircuita el resto de la cadena
 
+    suggestions: list[str] = field(default_factory=list)
+    suggestions_ms: int = 0
+
 
 class Stage(ABC):
     """Eslabón de la cadena.
@@ -110,15 +115,45 @@ historial ("ese producto", "y el plazo", "cuánto cuesta").
 
 REGLAS:
 - Devuelve SOLO la consulta reescrita, sin comillas ni explicación.
-- Conserva los términos del usuario; añade únicamente el sujeto que falta.
-- Si la pregunta ya se entiende por sí sola, devuélvela tal cual.
+- CONSERVA TODAS las palabras clave del usuario. Solo puedes AÑADIR el sujeto \
+que falta, nunca sustituir el tema por otro.
+- Si la pregunta ya se entiende por sí sola, devuélvela EXACTAMENTE IGUAL.
 - No respondas la pregunta ni añadas información nueva.
 
-Ejemplo:
+Ejemplo correcto (falta el sujeto, se añade):
   Historial: usuario: "¿Qué créditos de vivienda ofrecen?"
   Pregunta:  "¿Cuál es el plazo máximo de ese producto?"
   Salida:    ¿Cuál es el plazo máximo del crédito de vivienda?
+
+Ejemplo correcto (ya es autocontenida, no se toca):
+  Historial: usuario: "¿Qué plazos tiene el crédito de vehículo?"
+  Pregunta:  "¿Qué tipos de cuenta de ahorro hay?"
+  Salida:    ¿Qué tipos de cuenta de ahorro hay?
+
+NUNCA sustituyas la pregunta por el tema anterior. Si el usuario cambia de \
+tema, respétalo.
 """
+
+#: Palabras sin carga temática: no sirven para comprobar que la reescritura
+#: conserva el asunto de la pregunta.
+_PALABRAS_VACIAS_REESCRITURA = {
+    "cual", "cuales", "cuanto", "cuanta", "cuantos", "cuantas", "como", "donde",
+    "cuando", "para", "por", "con", "los", "las", "del", "una", "uno", "que",
+    "puedo", "puede", "tiene", "hay", "son", "ser", "esta", "este", "esos",
+    "esas", "eso", "esa", "ese", "sobre", "tienen", "ofrecen", "ofrece", "mas",
+    "pero", "todo", "toda", "desde", "hasta", "entre", "porque", "sin",
+}
+
+
+def _palabras_tematicas(texto: str) -> set[str]:
+    """Palabras con carga temática de una pregunta, sin tildes ni signos."""
+    normalizado = unicodedata.normalize("NFKD", texto.lower())
+    normalizado = "".join(c for c in normalizado if not unicodedata.combining(c))
+    return {
+        palabra
+        for palabra in re.findall(r"[a-z]{4,}", normalizado)
+        if palabra not in _PALABRAS_VACIAS_REESCRITURA
+    }
 
 
 class QueryRewriteStage(Stage):
@@ -178,21 +213,56 @@ class QueryRewriteStage(Stage):
 
         nueva = respuesta.content.strip().strip('"').strip()
         context.rewrite_ms = int((time.perf_counter() - started) * 1000)
-        # Se descartan reescrituras degeneradas (vacías o desproporcionadas):
-        # ante la duda, la pregunta original es la opción segura.
-        if nueva and 3 < len(nueva) <= max(200, len(context.question) * 4):
-            context.search_query = nueva
-            context.rewritten = nueva.lower() != context.question.lower()
-            context.prompt_tokens += respuesta.prompt_tokens
-            context.completion_tokens += respuesta.completion_tokens
-            if context.rewritten:
-                logger.info(
-                    "rag.query_rewritten",
-                    original=context.question[:80],
-                    reescrita=nueva[:80],
-                    ms=context.rewrite_ms,
-                )
+        context.prompt_tokens += respuesta.prompt_tokens
+        context.completion_tokens += respuesta.completion_tokens
+
+        if not self._es_reescritura_valida(context.question, nueva):
+            return context
+
+        context.search_query = nueva
+        context.rewritten = nueva.lower() != context.question.lower()
+        if context.rewritten:
+            logger.info(
+                "rag.query_rewritten",
+                original=context.question[:80],
+                reescrita=nueva[:80],
+                ms=context.rewrite_ms,
+            )
         return context
+
+    @staticmethod
+    def _es_reescritura_valida(original: str, nueva: str) -> bool:
+        """Comprueba que la reescritura AÑADE contexto en vez de sustituir el tema.
+
+        Sin esta comprobación el modelo, al ver el historial, a veces devuelve
+        directamente la pregunta ANTERIOR. Medido en vivo:
+
+            original  = "¿Qué tipos de cuenta de ahorro hay?"
+            reescrita = "¿Cuáles son los plazos del crédito de vehículo?"
+
+        Eso no es reescribir, es cambiarle la pregunta al usuario, y es peor que
+        no reescribir nada: corrompe justamente las preguntas autocontenidas,
+        que son la mayoría. La invariante es simple y verificable: una
+        reescritura legítima conserva al menos una palabra temática del
+        original. Si el usuario no aportó ninguna ("¿y eso?"), no hay nada que
+        preservar y se acepta —que es justo cuando reescribir hace más falta—.
+        """
+        if not nueva or not (3 < len(nueva) <= max(200, len(original) * 4)):
+            return False
+
+        tematicas_original = _palabras_tematicas(original)
+        if not tematicas_original:
+            return True
+        if tematicas_original & _palabras_tematicas(nueva):
+            return True
+
+        logger.warning(
+            "rag.rewrite_rechazada",
+            original=original[:80],
+            reescrita=nueva[:80],
+            motivo="no conserva ninguna palabra temática del usuario",
+        )
+        return False
 
 
 class RetrievalStage(Stage):
@@ -317,6 +387,106 @@ class GenerationStage(Stage):
             cited=cited,
         )
         return context
+
+
+_SUGGEST_SYSTEM = """\
+Propón preguntas de seguimiento que el usuario podría querer hacer a continuación.
+
+REGLAS ESTRICTAS:
+- SOLO preguntas cuya respuesta esté en el CONTEXTO proporcionado. Es preferible \
+devolver menos preguntas que proponer una que el sistema no pueda responder.
+- No repitas la pregunta que el usuario acaba de hacer ni lo ya respondido.
+- Breves (máximo 12 palabras), en español, formuladas como las haría un usuario.
+- Una por línea. Sin numeración, sin guiones, sin comillas, sin texto adicional.
+- Si el contexto no da para ninguna pregunta útil, no devuelvas nada.
+"""
+
+
+class SuggestionStage(Stage):
+    """Propone preguntas de seguimiento ancladas en el contexto recuperado.
+
+    **Por qué ancladas y no libres.** Una sugerencia es una promesa implícita:
+    el usuario pulsa el botón asumiendo que el sistema sabe la respuesta. Si se
+    generan a partir de conocimiento general del modelo, la mitad llevan a
+    "no encontré esa información" —peor que no ofrecer nada, porque el usuario
+    ya invirtió un clic y una expectativa—. Por eso el prompt recibe los mismos
+    fragmentos que se usaron para responder y se le prohíbe salirse de ellos.
+
+    No se proponen sugerencias cuando la respuesta no quedó fundamentada: ahí
+    no hay contexto del que derivarlas, y ofrecerlas sería inventar.
+
+    Coste: una llamada corta al LLM (~100 tokens). Se mide por separado en
+    `suggestions_ms` y se desactiva con `SUGGESTIONS_ENABLED=false`.
+    """
+
+    name = "suggestions"
+
+    def __init__(self, llm: LLMProvider, *, count: int = 3, context_chars: int = 2500) -> None:
+        super().__init__()
+        self._llm = llm
+        self._count = count
+        self._context_chars = context_chars
+
+    def process(self, context: RAGContext) -> RAGContext:
+        if self._count <= 0 or not context.documents or not context.grounded:
+            return context
+
+        contexto = "\n\n".join(
+            f"[{i}] {c.title}\n{c.text}" for i, c in enumerate(context.documents, start=1)
+        )[: self._context_chars]
+
+        started = time.perf_counter()
+        try:
+            respuesta = self._llm.complete(
+                [
+                    {"role": "system", "content": _SUGGEST_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"CONTEXTO:\n{contexto}\n\n"
+                            f"El usuario preguntó: {context.question}\n\n"
+                            f"Propón como máximo {self._count} preguntas de seguimiento."
+                        ),
+                    },
+                ],
+                max_tokens=120,
+                temperature=0.3,
+            )
+        except Exception as exc:  # noqa: BLE001 - las sugerencias son un extra
+            logger.warning("rag.suggestions_failed", error=str(exc))
+            return context
+
+        context.suggestions_ms = int((time.perf_counter() - started) * 1000)
+        context.prompt_tokens += respuesta.prompt_tokens
+        context.completion_tokens += respuesta.completion_tokens
+        context.suggestions = _limpiar_sugerencias(
+            respuesta.content, limite=self._count, pregunta_actual=context.question
+        )
+        logger.debug("rag.suggestions", n=len(context.suggestions), ms=context.suggestions_ms)
+        return context
+
+
+def _limpiar_sugerencias(bruto: str, *, limite: int, pregunta_actual: str) -> list[str]:
+    """Normaliza la salida del modelo a una lista de preguntas presentables.
+
+    El modelo tiende a numerar, poner viñetas o añadir una frase introductoria
+    pese a que el prompt lo prohíbe; conviene sanear en vez de confiar.
+    """
+    vistas: set[str] = {pregunta_actual.strip().lower()}
+    limpias: list[str] = []
+    for linea in bruto.splitlines():
+        texto = linea.strip().strip('"').strip("'")
+        texto = re.sub(r"^\s*(?:\d+[.)]|[-*•])\s*", "", texto).strip()
+        if not (8 <= len(texto) <= 120) or "?" not in texto:
+            continue
+        clave = texto.lower()
+        if clave in vistas:
+            continue
+        vistas.add(clave)
+        limpias.append(texto)
+        if len(limpias) >= limite:
+            break
+    return limpias
 
 
 def build_chain(stages: list[Stage]) -> Stage:
