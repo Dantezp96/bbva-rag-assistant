@@ -21,7 +21,7 @@ function Kpi({
 }: { label: string; value: string; hint?: string; tone?: "good" | "warn" }) {
   const color = tone === "good" ? "var(--good)" : tone === "warn" ? "var(--warn)" : "var(--fg)";
   return (
-    <div className="surface flex flex-col gap-1 rounded-lg px-4 py-3.5">
+    <div className="surface flex flex-col gap-1.5 px-4 py-4">
       <span className="eyebrow">{label}</span>
       <span className="mono text-[24px] font-semibold leading-none" style={{ color }}>
         {value}
@@ -34,8 +34,8 @@ function Kpi({
 function Seccion({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="flex items-baseline gap-2.5 text-[15px] font-semibold tracking-tight">
-        <span className="mono text-[11px]" style={{ color: "var(--accent)" }}>{n}</span>
+      <h2 className="flex items-baseline gap-2.5 text-[20px]">
+        <span className="mono text-[12px]" style={{ color: "var(--accent)" }}>{n}</span>
         {title}
       </h2>
       {children}
@@ -51,7 +51,7 @@ function Barras({ datos, unidad = "" }: { datos: { k: string; v: number }[]; uni
       {datos.map((d) => (
         <div key={d.k} className="flex items-center gap-3">
           <span className="w-32 shrink-0 truncate text-[12.5px]">{d.k}</span>
-          <span className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: "var(--surface-2)" }}>
+          <span className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: "var(--surface)" }}>
             <span
               className="block h-full rounded-full"
               style={{ width: `${(d.v / max) * 100}%`, background: "var(--accent)" }}
@@ -96,11 +96,11 @@ export function Dashboard() {
   const tokens = datos.total_prompt_tokens + datos.total_completion_tokens;
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-9 px-4 py-8 sm:px-6">
+    <div className="card mx-auto flex w-full max-w-5xl flex-col gap-9 px-5 py-8 sm:px-8">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="eyebrow mb-1.5">Histórico de conversaciones</p>
-          <h1 className="text-[26px] font-bold tracking-tight">Analítica de uso</h1>
+          <p className="eyebrow mb-2">Histórico de conversaciones</p>
+          <h1 className="text-[32px]">Analítica de uso</h1>
         </div>
         <div className="flex gap-1">
           {PERIODOS.map((p) => (
@@ -109,7 +109,7 @@ export function Dashboard() {
               onClick={() => setDias(p.days)}
               className="rounded px-2.5 py-1.5 text-[12.5px] transition-colors"
               style={{
-                background: dias === p.days ? "var(--surface-2)" : "transparent",
+                background: dias === p.days ? "var(--surface)" : "transparent",
                 color: dias === p.days ? "var(--fg)" : "var(--fg-dim)",
                 fontWeight: dias === p.days ? 600 : 400,
               }}
@@ -148,7 +148,7 @@ export function Dashboard() {
           />
         </div>
         {datos.unanswered_questions.length > 0 && (
-          <div className="surface rounded-lg px-4 py-3.5">
+          <div className="surface px-4 py-3.5">
             <p className="eyebrow mb-2">Preguntas sin responder · contenido pendiente</p>
             <ul className="flex flex-col gap-1.5">
               {datos.unanswered_questions.slice(0, 6).map((q, i) => (
@@ -170,7 +170,7 @@ export function Dashboard() {
             hint={`US$ ${datos.estimated_cost_usd.toFixed(4)} en total`}
           />
         </div>
-        <div className="surface rounded-lg px-4 py-4">
+        <div className="surface px-4 py-4">
           <p className="eyebrow mb-3">Latencia media por etapa · dice dónde optimizar</p>
           <Barras
             unidad=" ms"
@@ -190,11 +190,11 @@ export function Dashboard() {
 
       <Seccion n="04" title="Contenido">
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="surface rounded-lg px-4 py-4">
+          <div className="surface px-4 py-4">
             <p className="eyebrow mb-3">Temas más consultados</p>
             <Barras datos={datos.top_topics.slice(0, 7).map((t) => ({ k: t.term, v: t.count }))} />
           </div>
-          <div className="surface rounded-lg px-4 py-4">
+          <div className="surface px-4 py-4">
             <p className="eyebrow mb-3">Páginas más citadas</p>
             <ul className="flex flex-col gap-2">
               {datos.top_cited_pages.slice(0, 7).map((p) => (

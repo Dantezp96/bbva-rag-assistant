@@ -51,36 +51,41 @@ export function Shell({ children }: { children: React.ReactNode }) {
     estado === "ok" ? "var(--good)" : estado === "degraded" ? "var(--warn)" : "var(--bad)";
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header
-        className="sticky top-0 z-20 flex items-center gap-4 border-b px-4 py-3 sm:px-6"
-        style={{ borderColor: "var(--border)", background: "var(--bg)" }}
-      >
-        <Link href="/" className="flex items-center gap-2.5 shrink-0">
+    <div className="flex min-h-screen flex-col gap-3 p-3 sm:gap-4 sm:p-4">
+      {/* La cabecera es una tarjeta flotando sobre el fondo gris, como en
+          bbva.com.co: nada va pegado al borde de la ventana. */}
+      <header className="card sticky top-3 z-20 flex items-center gap-3 px-4 py-3 sm:top-4 sm:gap-5 sm:px-6">
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
           <span
-            className="grid h-7 w-7 place-items-center rounded text-[13px] font-bold"
-            style={{ background: "var(--color-navy)", color: "#fff" }}
+            className="grid h-8 w-8 place-items-center text-[13px] font-bold"
+            style={{
+              background: "var(--accent)",
+              color: "var(--accent-fg)",
+              borderRadius: "var(--radius-control)",
+            }}
             aria-hidden
           >
             B
           </span>
-          <span className="text-[15px] font-semibold tracking-tight">
-            Asistente <span className="dim font-normal">· BBVA Colombia</span>
+          <span className="text-[15px] leading-tight">
+            <span className="font-semibold">Asistente</span>
+            <span className="dim hidden sm:inline"> · BBVA Colombia</span>
           </span>
         </Link>
 
-        <nav className="ml-2 flex gap-1">
+        <nav className="flex gap-1">
           {NAV.map((n) => {
             const activo = pathname === n.href;
             return (
               <Link
                 key={n.href}
                 href={n.href}
-                className="rounded px-3 py-1.5 text-sm transition-colors"
+                className="px-3 py-1.5 text-[14px] transition-colors"
                 style={{
-                  background: activo ? "var(--surface-2)" : "transparent",
-                  color: activo ? "var(--fg)" : "var(--fg-dim)",
+                  background: activo ? "var(--surface)" : "transparent",
+                  color: activo ? "var(--accent)" : "var(--fg-dim)",
                   fontWeight: activo ? 600 : 400,
+                  borderRadius: "var(--radius-control)",
                 }}
               >
                 {n.label}
@@ -89,9 +94,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-2.5">
           <span
-            className="mono hidden items-center gap-2 text-[11px] sm:flex"
+            className="mono hidden items-center gap-2 text-[11.5px] sm:flex"
             title={
               health
                 ? `${health.details.llm.model} · ventana de ${health.details.history_window_size} mensajes`
@@ -113,8 +118,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </span>
           <button
             onClick={alternarTema}
-            className="rounded border px-2 py-1 text-[11px] transition-colors"
-            style={{ borderColor: "var(--border)", color: "var(--fg-dim)" }}
+            className="px-2.5 py-1.5 text-[12px] transition-colors"
+            style={{
+              background: "var(--surface)",
+              color: "var(--fg-dim)",
+              borderRadius: "var(--radius-control)",
+            }}
             aria-label="Cambiar entre tema claro y oscuro"
           >
             Tema

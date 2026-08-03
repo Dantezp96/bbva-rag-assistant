@@ -107,38 +107,48 @@ export function Chat() {
   const sugerencias = !ocupado && ultimo?.role === "assistant" ? ultimo.suggestions ?? [] : [];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 sm:px-6">
+    <div className="card mx-auto flex w-full max-w-3xl flex-1 flex-col px-5 sm:px-8">
       {/* ------------------------------------------------ estado vacío --- */}
       {vacio && (
-        <div className="flex flex-1 flex-col justify-center py-10">
-          <p className="eyebrow mb-3">Asistente sobre bbva.com.co</p>
-          <h1 className="mb-2 text-[27px] font-bold leading-tight tracking-tight sm:text-[32px]">
+        <div className="flex flex-1 flex-col justify-center py-12">
+          <p className="eyebrow mb-4">Asistente sobre bbva.com.co</p>
+          {/* Titular en serif, como los de bbva.com.co */}
+          <h1
+            className="text-[34px] sm:text-[44px]"
+            style={{ lineHeight: 1.16, color: "var(--accent)" }}
+          >
             ¿Qué necesitas saber?
           </h1>
-          <p className="dim mb-7 max-w-[52ch] text-[15px]">
+          <p className="dim mb-9 mt-4 max-w-[54ch]">
             Respondo con el contenido publicado en el sitio de BBVA Colombia y cito
             siempre la página de la que sale cada dato.
           </p>
 
           {starters && starters.questions.length > 0 && (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2.5">
               <p className="eyebrow">
                 {starters.source === "historico"
                   ? "Las más consultadas"
                   : "Para empezar"}
               </p>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-2">
                 {starters.questions.map((q) => (
                   <button
                     key={q}
                     onClick={() => enviar(q)}
-                    className="surface group flex items-center gap-3 rounded-md px-4 py-3 text-left text-[14px] transition-all hover:brightness-[0.97]"
-                    style={{ borderColor: "var(--border)" }}
+                    className="surface group flex items-center gap-3 px-4 py-3.5 text-left transition-colors"
+                    style={{ color: "var(--accent)", fontWeight: 500 }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background =
+                        "color-mix(in srgb, var(--accent) 7%, var(--surface))")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "var(--surface)")
+                    }
                   >
                     <span className="flex-1">{q}</span>
                     <span
-                      className="mono shrink-0 text-[13px] opacity-0 transition-opacity group-hover:opacity-100"
-                      style={{ color: "var(--accent)" }}
+                      className="shrink-0 text-[15px] opacity-0 transition-opacity group-hover:opacity-100"
                       aria-hidden
                     >
                       →
@@ -158,8 +168,11 @@ export function Chat() {
             m.role === "user" ? (
               <div key={m.id} className="flex justify-end">
                 <p
-                  className="max-w-[85%] rounded-2xl rounded-br-sm px-4 py-2.5 text-[15px]"
-                  style={{ background: "var(--surface-2)" }}
+                  className="max-w-[85%] px-4 py-2.5"
+                  style={{
+                    background: "var(--surface)",
+                    borderRadius: "16px 16px 4px 16px",
+                  }}
                 >
                   {m.content}
                 </p>
@@ -191,8 +204,12 @@ export function Chat() {
                       <button
                         key={s}
                         onClick={() => enviar(s)}
-                        className="rounded-full border px-3 py-1.5 text-[12.5px] transition-colors hover:brightness-[0.97]"
-                        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                        className="surface px-3.5 py-2 text-[13px] transition-colors"
+                        style={{
+                          color: "var(--accent)",
+                          fontWeight: 500,
+                          borderRadius: "999px",
+                        }}
                       >
                         {s}
                       </button>
@@ -207,13 +224,13 @@ export function Chat() {
       )}
 
       {/* ---------------------------------------------------- composer --- */}
-      <div className="sticky bottom-0 pb-4 pt-2" style={{ background: "var(--bg)" }}>
+      <div className="sticky bottom-0 pb-5 pt-3" style={{ background: "var(--card)" }}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             enviar(entrada);
           }}
-          className="surface flex items-end gap-2 rounded-xl p-2 transition-shadow focus-within:shadow-[0_0_0_2px_var(--ring)]"
+          className="surface flex items-end gap-2 p-2 transition-shadow focus-within:shadow-[0_0_0_2px_var(--ring)]"
         >
           <textarea
             ref={areaRef}
@@ -239,8 +256,8 @@ export function Chat() {
           <button
             type="submit"
             disabled={!entrada.trim() || ocupado}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[15px] transition-opacity disabled:opacity-30"
-            style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+            className="btn btn-primary grid h-10 w-10 shrink-0 place-items-center text-[16px] disabled:opacity-30"
+            style={{ padding: 0 }}
             aria-label="Enviar pregunta"
           >
             ↑

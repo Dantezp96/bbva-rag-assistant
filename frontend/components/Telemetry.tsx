@@ -8,10 +8,10 @@ import type { Telemetry as T } from "@/lib/types";
 /** Barra proporcional del reparto de tiempo entre etapas del pipeline. */
 function Etapas({ t }: { t: T }) {
   const etapas = [
-    { k: "Reescritura", ms: t.rewrite_ms, c: "var(--color-sky)" },
+    { k: "Reescritura", ms: t.rewrite_ms, c: "var(--color-bbva-sky)" },
     { k: "Recuperación", ms: t.retrieval_ms, c: "var(--good)" },
     { k: "Reranking", ms: t.rerank_ms, c: "var(--accent)" },
-    { k: "Generación", ms: t.llm_ms, c: "var(--color-navy)" },
+    { k: "Generación", ms: t.llm_ms, c: "var(--accent)" },
     { k: "Sugerencias", ms: t.suggestions_ms, c: "var(--warn)" },
   ].filter((e) => e.ms > 0);
   const total = etapas.reduce((s, e) => s + e.ms, 0) || 1;

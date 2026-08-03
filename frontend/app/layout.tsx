@@ -1,20 +1,28 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { IBM_Plex_Mono, Public_Sans, Source_Serif_4 } from "next/font/google";
 
 import "./globals.css";
 import { Shell } from "@/components/Shell";
 
-// IBM Plex: la variante mono se usa para cifras y telemetría, que en este
-// producto son contenido. Alinear dígitos importa más que el adorno.
-const sans = IBM_Plex_Sans({
+// Sustitutos libres de las familias propietarias de BBVA:
+//   Benton Sans BBVA  ->  Public Sans   (mismo esqueleto News Gothic)
+//   Tiempos Headline  ->  Source Serif  (serif transicional de alto contraste)
+// El monoespaciado se reserva para cifras y telemetría, que aquí son contenido.
+const sans = Public_Sans({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-plex-sans",
+  weight: ["300", "400", "500", "600", "700"],
+  variable: "--font-public-sans",
+  display: "swap",
+});
+const serif = Source_Serif_4({
+  subsets: ["latin"],
+  weight: ["600", "700"],
+  variable: "--font-source-serif",
   display: "swap",
 });
 const mono = IBM_Plex_Mono({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: ["400", "500"],
   variable: "--font-plex-mono",
   display: "swap",
 });
@@ -27,7 +35,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className={`${sans.variable} ${mono.variable}`}>
+    <html
+      lang="es"
+      className={`${sans.variable} ${serif.variable} ${mono.variable}`}
+    >
       <body>
         <Shell>{children}</Shell>
       </body>

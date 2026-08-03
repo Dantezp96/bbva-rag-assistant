@@ -44,7 +44,7 @@ export function Sources({ sources }: { sources: Source[] }) {
                 href={s.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="surface flex items-start gap-2.5 rounded px-3 py-2 transition-colors hover:brightness-[0.97]"
+                className="surface flex items-start gap-2.5 px-3 py-2.5 transition-colors hover:brightness-[0.97]"
               >
                 <span className="cite mt-0.5 shrink-0">[{s.index}]</span>
                 <span className="min-w-0 flex-1">
